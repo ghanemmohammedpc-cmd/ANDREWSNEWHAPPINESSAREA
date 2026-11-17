@@ -11,6 +11,7 @@ const owner = '123456789012345678', member = '234567890123456789', origin = 'htt
 let sqlite: DatabaseSync, env: Env, store: Store, identity: string, belongs: boolean;
 beforeEach(() => {
   sqlite = new DatabaseSync(':memory:'); sqlite.exec(readFileSync('cloudflare/migrations/0001_library.sql', 'utf8'));
+  sqlite.exec(readFileSync('cloudflare/migrations/0003_reports.sql', 'utf8'));
   const prepare = (sql: string) => ({ values: [] as any[], sql, bind(...values: any[]) { this.values = values; return this; }, async first() { return sqlite.prepare(sql).get(...this.values) || null; }, async all() { return { results: sqlite.prepare(sql).all(...this.values) }; }, async run() { return sqlite.prepare(sql).run(...this.values); } });
   env = { DB: { prepare, async batch(statements: any[]) { sqlite.exec('BEGIN'); try { const results = statements.map(s => sqlite.prepare(s.sql).run(...s.values)); sqlite.exec('COMMIT'); return results; } catch (e) { sqlite.exec('ROLLBACK'); throw e; } } } as any, APP_BASE_URL: origin, SESSION_SECRET: 'a'.repeat(48), DISCORD_CLIENT_ID: '345678901234567890', DISCORD_CLIENT_SECRET: 'client-secret', DISCORD_BOT_TOKEN: 'bot-secret', DISCORD_GUILD_ID: '456789012345678901', ADMIN_DISCORD_IDS: owner, DISCORD_INVITE_URL: 'https://discord.gg/test', GITHUB_REPOSITORY: 'owner/repo', GITHUB_TOKEN: 'github-secret', PUBLISH_CALLBACK_SECRET: 'callback-secret' };
   store = new Store(env.DB); identity = owner; belongs = true;
@@ -76,6 +77,7 @@ it('rejects invalid upload sizes, duplicate hashes and unauthenticated publicati
 it('paginates existing releases and strips GitHub authorization on asset redirects', async () => {
   const calls: Array<{ url: string; authorization: string | null }> = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.redirect === 'error') throw new TypeError('Unsupported redirect option in the edge runtime');
     calls.push({ url, authorization: new Headers(init?.headers).get('authorization') });
     if (new URL(url).searchParams.get('page') === '1') return Response.json(Array.from({ length: 100 }, () => ({ draft: false, assets: [], id: 1 })));
     if (new URL(url).searchParams.get('page') === '2') return Response.json([{ draft: false, assets: [{ name: 'Car.zip', id: 12, size: 4, digest: `sha256:${'a'.repeat(64)}` }], id: 2, name: 'Original title' }]);
@@ -101,4 +103,55 @@ it('imports only checksum-verified assets in the configured repository and is id
   expect(second.duplicate).toBe(true); expect((await store.get('SELECT count(*) n FROM versions'))?.n).toBe(1);
   const list = await (await request('/api/v1/mods', 'GET', (await login()).token)).json() as any;
   expect(list.items[0].activeVersion.filename).toBe('Car 2023.zip');
+});
+it('filters and orders confirmed brands across catalog pages, leaving unknown brands last', async () => {
+  const { token } = await login();
+  for (const brand of ['Toyota', '', 'Honda']) { const id = await listing(), row = await store.get('SELECT metadata FROM mods WHERE id=?', id); const data = { ...JSON.parse(row!.metadata), manufacturer: brand }; await store.run('UPDATE mods SET metadata=? WHERE id=?', JSON.stringify(data), id); }
+  const sorted = await (await request('/api/v1/mods?sort=brand', 'GET', token)).json() as any; expect(sorted.items.map((m: any) => m.manufacturer)).toEqual(['Honda', 'Toyota', '']);
+  const filtered = await (await request('/api/v1/mods?brand=Toyota', 'GET', token)).json() as any; expect(filtered.total).toBe(1); expect(filtered.items[0].manufacturer).toBe('Toyota');
+  expect((await (await request('/api/v1/mods?brand=__unknown__', 'GET', token)).json() as any).total).toBe(1);
+  expect(await (await request('/api/v1/mods/brands', 'GET', token)).json()).toEqual(['', 'Honda', 'Toyota']);
+  expect((await request('/api/v1/mods/brands')).status).toBe(401);
+});
+it('accepts member car reports, keeps the inbox private and lets only the owner resolve them', async () => {
+  const admin = await login(), visitor = await login(member), id = await listing();
+  const response = await request(`/api/v1/mods/${id}/reports`, 'POST', visitor.token, { body: 'The headlights have missing textures.' }); expect(response.status).toBe(200);
+  const report = await response.json() as any;
+  await request(`/api/v1/mods/${id}/reports`, 'POST', visitor.token, { body: 'The left headlight has missing textures.' });
+  expect((await store.get('SELECT count(*) n FROM reports'))?.n).toBe(1);
+  expect((await request('/api/v1/admin/reports', 'GET', visitor.token)).status).toBe(403);
+  expect((await request(`/api/v1/admin/reports/${report.id}`, 'PATCH', visitor.token, { status: 'resolved' })).status).toBe(403);
+  const inbox = await (await request('/api/v1/admin/reports', 'GET', admin.token)).json() as any[]; expect(inbox[0]).toMatchObject({ body: 'The left headlight has missing textures.', status: 'open', mod_name: 'Car 2023' });
+  expect((await request(`/api/v1/admin/reports/${report.id}`, 'PATCH', admin.token, { status: 'resolved' })).status).toBe(200);
+  expect((await store.get('SELECT status FROM reports WHERE id=?', report.id))?.status).toBe('resolved');
+  expect((await request(`/api/v1/mods/${id}/reports`, 'POST', undefined, { body: 'Report' })).status).toBe(401);
+  await store.run("UPDATE mods SET type='map' WHERE id=?", id);
+  expect((await request(`/api/v1/mods/${id}/reports`, 'POST', visitor.token, { body: 'Report' })).status).toBe(400);
+});
+it('updates category and lighting labels without touching a GitHub release or filename', async () => {
+  const id = await listing(), versionId = crypto.randomUUID(), sha = 'b'.repeat(64);
+  await store.run('INSERT INTO versions VALUES(?,?,?,?,?,?,?,?,?)', versionId, id, '', '', 'Original.zip', 100, sha, 'github-releases|github:123', Date.now()); await store.run('UPDATE mods SET active_version=? WHERE id=?', versionId, id);
+  const input = { ownerId: owner, items: [{ sha256: sha, type: 'addon', manufacturer: '', model: '', years: '', lightingUpdated: true }] };
+  expect((await request('/api/v1/publish/metadata', 'POST', undefined, input)).status).toBe(401);
+  expect((await request('/api/v1/publish/metadata', 'POST', env.PUBLISH_CALLBACK_SECRET, input)).status).toBe(200);
+  const updated = await store.requireMod(id); expect(updated.name).toBe('Car 2023 (0.40 update)'); expect(updated.type).toBe('addon'); expect(updated.activeVersion!.filename).toBe('Original.zip');
+  await request('/api/v1/publish/metadata', 'POST', env.PUBLISH_CALLBACK_SECRET, input); expect((await store.requireMod(id)).name).toBe(updated.name);
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('github.com'))).toBe(false);
+});
+it('publishes replacement ZIPs as versions of the existing listing', async () => {
+  const id = await listing(), priorVersion = crypto.randomUUID();
+  await store.run('INSERT INTO versions VALUES(?,?,?,?,?,?,?,?,?)', priorVersion, id, '', '', 'Original.zip', 90, 'a'.repeat(64), 'github-releases|github:11', Date.now()); await store.run('UPDATE mods SET active_version=? WHERE id=?', priorVersion, id);
+  const prior = fetch; vi.stubGlobal('fetch', vi.fn(async (url: any, init?: any) => String(url).endsWith('/releases/12') ? Response.json({ draft: false, assets: [{ id: 13, name: 'Original.zip', size: 100, digest: `sha256:${'b'.repeat(64)}` }] }) : prior(url, init)));
+  const input = { ownerId: owner, modId: id, releaseId: '12', assetId: '13', filename: 'Original.zip', size: 100, sha256: 'b'.repeat(64), metadata: metadataSchema.parse({ name: 'Car 2023', creator: 'Creator', type: 'car' }) };
+  expect((await request('/api/v1/publish/import', 'POST', env.PUBLISH_CALLBACK_SECRET, input)).status).toBe(200);
+  expect((await store.get('SELECT count(*) n FROM mods'))?.n).toBe(1); expect((await store.get('SELECT count(*) n FROM versions'))?.n).toBe(2); expect((await store.requireMod(id)).activeVersion?.sha256).toBe(input.sha256);
+});
+it('replaces a thumbnail without altering the ZIP version or exposing service access', async () => {
+  const id = await listing(), versionId = crypto.randomUUID(), sha256 = 'a'.repeat(64);
+  await store.run('INSERT INTO versions VALUES(?,?,?,?,?,?,?,?,?)', versionId, id, '', '', 'Original.zip', 100, sha256, 'github-releases|github:11', Date.now()); await store.run('UPDATE mods SET active_version=? WHERE id=?', versionId, id);
+  const input = { ownerId: owner, sha256, body: Buffer.from([255,216,255,217]).toString('base64'), width: 10, height: 10 };
+  expect((await request('/api/v1/publish/thumbnail', 'POST', undefined, input)).status).toBe(401);
+  expect((await request('/api/v1/publish/thumbnail', 'POST', env.PUBLISH_CALLBACK_SECRET, input)).status).toBe(200);
+  const mod = await store.requireMod(id); expect(mod.thumbnailId).toBeTruthy(); expect(mod.activeVersion?.id).toBe(versionId);
+  expect(await (await request('/api/v1/publish/thumbnail', 'POST', env.PUBLISH_CALLBACK_SECRET, input)).json()).toEqual({ updated: false });
 });

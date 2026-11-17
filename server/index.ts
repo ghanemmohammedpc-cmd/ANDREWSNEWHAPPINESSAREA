@@ -64,6 +64,7 @@ export async function createApp(options: { config: Config; discord?: DiscordProv
   app.post('/api/v1/auth/recheck-membership', async request => { const user = await auth.require(request, false, true); const { sessionHash: _hash, authenticatedAt: _at, ...publicUser } = user; return publicUser; });
   app.post('/api/v1/auth/logout', async request => { await auth.logout(request); return { ok: true }; });
   app.get('/api/v1/mods', async request => { await auth.require(request); return store.list(querySchema.parse(request.query)); });
+  app.get('/api/v1/mods/brands', async request => { await auth.require(request); return store.all("SELECT DISTINCT trim(coalesce(json_extract(metadata,'$.manufacturer'),'')) brand FROM mods WHERE deleted_at IS NULL AND status='published' AND type='car' ORDER BY brand COLLATE NOCASE").map(row => row.brand); });
   app.get('/api/v1/mods/favorites', async request => {
     await auth.require(request); const query = request.query as Record<string, string>;
     const ids = z.array(idSchema).max(500).parse(query.ids ? query.ids.split(',') : []);
@@ -71,6 +72,19 @@ export async function createApp(options: { config: Config; discord?: DiscordProv
   });
   app.get('/api/v1/mods/:id', async request => { const user = await auth.require(request); return store.requireMod(bodyId(request), user.admin); });
   app.get('/api/v1/mods/:id/versions', async request => { const user = await auth.require(request); const id = bodyId(request); store.requireMod(id, user.admin); return store.all('SELECT * FROM versions WHERE mod_id=? ORDER BY created_at DESC', id).map(row => store.version(row)); });
+  app.post('/api/v1/mods/:id/reports', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async request => {
+    const user = await auth.require(request, false, true), id = bodyId(request), mod = store.requireMod(id, user.admin);
+    if (mod.type !== 'car') throw new HubError('INVALID_REPORT', 'Select a car to report.');
+    const input = z.object({ body: z.string().trim().min(5).max(2000) }).parse(request.body), now = Date.now();
+    const previous = store.get("SELECT id FROM reports WHERE mod_id=? AND user_id=? AND status='open'", id, user.id), reportId = previous?.id || randomUUID();
+    store.run("INSERT INTO reports VALUES(?,?,?,?,'open',?,?) ON CONFLICT(mod_id,user_id) WHERE status='open' DO UPDATE SET body=excluded.body,updated_at=excluded.updated_at", reportId, id, user.id, input.body, now, now); return { id: reportId, status: 'open' };
+  });
+  app.get('/api/v1/admin/reports', async request => { await auth.require(request, true); return store.all('SELECT r.*,m.name mod_name,u.name reporter_name FROM reports r JOIN mods m ON m.id=r.mod_id JOIN users u ON u.id=r.user_id ORDER BY r.status ASC,r.updated_at DESC LIMIT 200'); });
+  app.patch('/api/v1/admin/reports/:id', async request => {
+    const user = await auth.require(request, true, true), id = bodyId(request), input = z.object({ status: z.enum(['open', 'resolved']) }).parse(request.body);
+    if (!store.get('SELECT id FROM reports WHERE id=?', id)) throw new HubError('NOT_FOUND', 'The report is not available.', 404);
+    store.run('UPDATE reports SET status=?,updated_at=? WHERE id=?', input.status, Date.now(), id); store.audit(user.id, 'review_report', id, { status: input.status }); return { ok: true };
+  });
   app.get('/api/v1/mods/:id/reviews', async request => {
     const user = await auth.require(request), id = bodyId(request); store.requireMod(id, user.admin);
     const summary = store.get('SELECT count(*) count,avg(rating) average FROM reviews WHERE mod_id=?', id);

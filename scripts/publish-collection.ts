@@ -13,9 +13,11 @@ const gh = process.env.GH_PATH || 'C:/Users/ghane/Documents/Codex/Tools/GitHub C
 const token = execFileSync(gh, ['auth', 'token', '--hostname', 'github.com'], { encoding: 'utf8', windowsHide: true }).trim();
 const headers = { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'TeamRazkaProgram', 'x-github-api-version': '2026-03-10' };
 const ownerId = config.ADMIN_DISCORD_IDS?.split(',')[0]?.trim();
+const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : undefined;
 if (!ownerId || !config.PUBLISH_CALLBACK_SECRET) throw new Error('Private publication configuration is incomplete.');
 const lockPath = path.join(directory, 'publication.lock'), lock = await open(lockPath, 'wx'); await lock.writeFile(String(process.pid));
 let journal: Record<string, any> = {}; try { journal = JSON.parse(await readFile(journalPath, 'utf8')); } catch {}
+if (process.argv.includes('--retry')) for (const state of Object.values(journal)) if (state.status === 'failed') state.status = 'pending';
 async function save() { await writeFile(journalPath + '.tmp', JSON.stringify(journal, null, 2)); await rename(journalPath + '.tmp', journalPath); }
 async function api(endpoint: string, method = 'GET', body?: unknown): Promise<any> {
   const response = await fetch(`https://api.github.com/repos/${repo}${endpoint}`, { method, headers: { ...headers, ...(body ? { 'content-type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), redirect: 'error', signal: AbortSignal.timeout(60000) });
@@ -26,7 +28,7 @@ async function releases() { const values = []; for (let page = 1; ; page++) { co
 async function importListing(item: any, release: any, asset: any) {
   let picture;
   if (item.picture) { const buffer = await readFile(item.picture), info = await sharp(buffer).metadata(); picture = { body: buffer.toString('base64'), width: info.width, height: info.height }; }
-  const r = await fetch(`${origin}/api/v1/publish/import`, { method: 'POST', headers: { authorization: `Bearer ${config.PUBLISH_CALLBACK_SECRET}`, 'content-type': 'application/json' }, body: JSON.stringify({ ownerId, releaseId: String(release.id), assetId: String(asset.id), filename: item.filename, size: item.size, sha256: item.sha256, metadata: item.metadata, ...(picture ? { picture } : {}) }), signal: AbortSignal.timeout(60000) });
+  const r = await fetch(`${origin}/api/v1/publish/import`, { method: 'POST', headers: { authorization: `Bearer ${config.PUBLISH_CALLBACK_SECRET}`, 'content-type': 'application/json' }, body: JSON.stringify({ ownerId, ...(item.replacesModId ? { modId: item.replacesModId } : {}), renameListing: Boolean(item.renameListing), releaseId: String(release.id), assetId: String(asset.id), filename: item.filename, size: item.size, sha256: item.sha256, metadata: item.metadata, ...(picture ? { picture } : {}) }), signal: AbortSignal.timeout(60000) });
   const result = await r.json() as any; if (!r.ok) throw new Error(`Catalog import ${r.status}: ${result.error?.code || 'failed'}`); return result.modId;
 }
 async function run() {
@@ -37,12 +39,12 @@ async function run() {
   console.log(`Found ${remote.length} existing releases and ${initialAssetCount} assets; existing files will be read only.`);
   for (;;) {
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-    const waiting = manifest.items.filter((item: any) => item.status === 'ready' && journal[item.sha256]?.status !== 'published' && journal[item.sha256]?.status !== 'failed');
+    const waiting = manifest.items.filter((item: any) => item.status === 'ready' && (!only || item.filename === only) && journal[item.sha256]?.status !== 'published' && journal[item.sha256]?.status !== 'failed');
     for (const item of waiting) {
       const state = journal[item.sha256] ||= { filename: item.filename, file: item.file, createdAt: Date.now(), status: 'pending' };
       try {
         const current = await stat(item.file); if (current.size !== item.size || current.mtimeMs !== item.modified) throw new Error('The local source changed after validation.');
-        let release = remote.find(r => r.assets.some((a: any) => a.size === item.size && a.digest === `sha256:${item.sha256}`));
+        let release = remote.find(r => !r.draft && r.assets.some((a: any) => a.size === item.size && a.digest === `sha256:${item.sha256}`));
         let asset = release?.assets.find((a: any) => a.size === item.size && a.digest === `sha256:${item.sha256}`);
         if (!asset) {
           if (state.releaseId) { release = await api(`/releases/${state.releaseId}`); if (protectedIds.has(String(release.id)) && !state.createdByThisRun) throw new Error('An existing release cannot be changed.'); }
@@ -68,7 +70,7 @@ async function run() {
         console.log(`Published ${item.filename}`);
       } catch (error) { state.status = 'failed'; state.error = error instanceof Error ? error.message : 'Publication failed.'; await save(); console.log(`Needs attention: ${item.filename}: ${state.error}`); }
     }
-    if (manifest.completedAt) break; await delay(5000);
+    if (manifest.completedAt || only) break; await delay(5000);
   }
   const existing = await api('/releases/447251428');
   const original = existing?.assets.find((a: any) => a.id === 755438824);

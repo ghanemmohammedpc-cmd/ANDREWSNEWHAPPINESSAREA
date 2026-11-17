@@ -46,9 +46,38 @@ export async function handle(request: Request, env: Env): Promise<Response> {
     catch (error) { if (error instanceof HubError) return signInPage('Sign-in could not be completed', error.code === 'INVALID_OAUTH_STATE' ? 'This sign-in request has expired or was already used. Return to the program and start sign-in again.' : 'Return to the program for the sign-in result. Check that you belong to the Team Razka Discord server before trying again.', error.status); throw error; }
     return signInPage('Signed in', 'Return to Team Razka Program. You can close this page.');
   }
+  if (path === '/api/v1/publish/thumbnail' && method === 'POST') {
+    await service(request, env);
+    const input = z.object({ ownerId: z.string().regex(/^\d{15,22}$/), sha256: z.string().regex(/^[a-f0-9]{64}$/), body: z.string().max(1600000), width: z.number().int().min(1).max(1600), height: z.number().int().min(1).max(1600) }).parse(await body(request, 1800000));
+    if (!env.ADMIN_DISCORD_IDS.split(',').map(v => v.trim()).includes(input.ownerId)) throw new HubError('FORBIDDEN', 'Owner access is required.', 403);
+    await auth.membership(input.ownerId);
+    const row = await store.get('SELECT m.* FROM mods m JOIN versions v ON v.id=m.active_version WHERE v.sha256=? AND m.deleted_at IS NULL', input.sha256); if (!row) return json({ updated: false });
+    const metadata = metadataSchema.parse(JSON.parse(row.metadata)), current = metadata.thumbnailId ? await store.get('SELECT body FROM media WHERE id=?', metadata.thumbnailId) : null;
+    if (current?.body === input.body) return json({ updated: false });
+    const bytes = Buffer.from(input.body, 'base64'); if (bytes.length > 1200000 || bytes[0] !== 255 || bytes[1] !== 216 || bytes.at(-2) !== 255 || bytes.at(-1) !== 217) throw new HubError('INVALID_IMAGE', 'The picture is not a valid JPEG.');
+    const id = crypto.randomUUID(), now = Date.now(); metadata.thumbnailId = id;
+    await env.DB.batch([store.statement('INSERT INTO media(id,key,mime,width,height,owner_id,created_at,body) VALUES(?,?,?,?,?,?,?,?)', id, `${id}.jpg`, 'image/jpeg', input.width, input.height, input.ownerId, now, input.body), store.statement('UPDATE mods SET metadata=?,updated_at=? WHERE id=?', JSON.stringify(metadata), now, row.id)]);
+    await store.audit(input.ownerId, 'update_thumbnail', row.id); return json({ updated: true });
+  }
+  if (path === '/api/v1/publish/metadata' && method === 'POST') {
+    await service(request, env);
+    const input = z.object({ ownerId: z.string().regex(/^\d{15,22}$/), items: z.array(z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/), type: z.enum(['car', 'map', 'addon']), manufacturer: z.string().max(80), model: z.string().max(100), years: z.string().max(40), lightingUpdated: z.boolean() })).max(10) }).parse(await body(request));
+    if (!env.ADMIN_DISCORD_IDS.split(',').map(v => v.trim()).includes(input.ownerId)) throw new HubError('FORBIDDEN', 'Owner access is required.', 403);
+    await auth.membership(input.ownerId); const updated = [];
+    for (const item of input.items) {
+      const row = await store.get('SELECT m.id,m.name,m.metadata FROM mods m JOIN versions v ON v.id=m.active_version WHERE v.sha256=? AND m.deleted_at IS NULL', item.sha256); if (!row) continue;
+      const previous = metadataSchema.parse(JSON.parse(row.metadata));
+      const name = item.lightingUpdated && !row.name.endsWith(' (0.40 update)') ? `${row.name} (0.40 update)` : row.name;
+      const metadata = metadataSchema.parse({ ...previous, name, type: item.type, manufacturer: item.manufacturer, model: item.model, years: item.years, lightingUpdated: item.lightingUpdated });
+      if (JSON.stringify(previous) === JSON.stringify(metadata)) continue;
+      await store.run('UPDATE mods SET name=?,type=?,metadata=?,search=?,updated_at=? WHERE id=?', metadata.name, metadata.type, JSON.stringify(metadata), store.search(metadata), Date.now(), row.id);
+      await store.audit(input.ownerId, 'update_metadata', row.id, { lightingUpdated: item.lightingUpdated, type: item.type }); updated.push(row.id);
+    }
+    return json({ updated });
+  }
   if (path === '/api/v1/publish/import' && method === 'POST') {
     await service(request, env);
-    const input = z.object({ ownerId: z.string().regex(/^\d{15,22}$/), releaseId: z.string().regex(/^\d+$/), assetId: z.string().regex(/^\d+$/), filename: z.string(), size: z.number().int().positive().max(2 ** 31 - 1), sha256: z.string().regex(/^[a-f0-9]{64}$/), metadata: metadataSchema, picture: z.object({ body: z.string().max(1600000), width: z.number().int().min(1).max(1600), height: z.number().int().min(1).max(1600) }).optional() }).parse(await body(request, 1800000));
+    const input = z.object({ ownerId: z.string().regex(/^\d{15,22}$/), modId: idSchema.optional(), renameListing: z.boolean().default(false), releaseId: z.string().regex(/^\d+$/), assetId: z.string().regex(/^\d+$/), filename: z.string(), size: z.number().int().positive().max(2 ** 31 - 1), sha256: z.string().regex(/^[a-f0-9]{64}$/), metadata: metadataSchema, picture: z.object({ body: z.string().max(1600000), width: z.number().int().min(1).max(1600), height: z.number().int().min(1).max(1600) }).optional() }).parse(await body(request, 1800000));
     safeFilename(input.filename);
     if (!env.ADMIN_DISCORD_IDS.split(',').map(v => v.trim()).includes(input.ownerId)) throw new HubError('FORBIDDEN', 'Owner access is required.', 403);
     await auth.membership(input.ownerId);
@@ -56,10 +85,14 @@ export async function handle(request: Request, env: Env): Promise<Response> {
     if (release.draft || !asset || asset.size !== input.size || asset.digest !== `sha256:${input.sha256}`) throw new HubError('CHECKSUM_MISMATCH', 'The GitHub ZIP did not match the verified file.', 409);
     const previous = await store.get('SELECT mod_id FROM versions WHERE sha256=?', input.sha256);
     if (previous) return json({ ok: true, duplicate: true, modId: previous.mod_id });
-    const modId = crypto.randomUUID(), versionId = crypto.randomUUID(), imageId = input.picture ? crypto.randomUUID() : null, now = Date.now();
-    const metadata = { ...input.metadata, thumbnailId: imageId }, statements = [];
+    const existing = input.modId ? await store.get('SELECT * FROM mods WHERE id=? AND deleted_at IS NULL', input.modId) : null;
+    if (input.modId && !existing) throw new HubError('NOT_FOUND', 'The listing to update is not available.', 404);
+    const oldMetadata = existing ? metadataSchema.parse(JSON.parse(existing.metadata)) : null;
+    const modId = input.modId || crypto.randomUUID(), versionId = crypto.randomUUID(), imageId = input.picture ? crypto.randomUUID() : oldMetadata?.thumbnailId || null, now = Date.now();
+    const metadata = { ...input.metadata, ...(existing ? { name: input.renameListing ? input.metadata.name : existing.name, lightingUpdated: input.metadata.lightingUpdated || oldMetadata!.lightingUpdated } : {}), thumbnailId: imageId }, statements = [];
     if (input.picture) { const bytes = Buffer.from(input.picture.body, 'base64'); if (bytes.length > 1200000 || bytes[0] !== 255 || bytes[1] !== 216 || bytes.at(-2) !== 255 || bytes.at(-1) !== 217) throw new HubError('INVALID_IMAGE', 'The picture is not a valid JPEG.'); statements.push(store.statement('INSERT INTO media(id,key,mime,width,height,owner_id,created_at,body) VALUES(?,?,?,?,?,?,?,?)', imageId, `${imageId}.jpg`, 'image/jpeg', input.picture.width, input.picture.height, input.ownerId, now, input.picture.body)); }
-    statements.push(store.statement("INSERT INTO mods(id,name,creator,type,metadata,search,status,active_version,created_at,updated_at) VALUES(?,?,?,?,?,?,'published',?,?,?)", modId, metadata.name, metadata.creator, metadata.type, JSON.stringify(metadata), store.search(metadata), versionId, now, now));
+    if (existing) statements.push(store.statement('UPDATE mods SET name=?,creator=?,type=?,metadata=?,search=?,active_version=?,updated_at=? WHERE id=?', metadata.name, metadata.creator, metadata.type, JSON.stringify(metadata), store.search(metadata), versionId, now, modId));
+    else statements.push(store.statement("INSERT INTO mods(id,name,creator,type,metadata,search,status,active_version,created_at,updated_at) VALUES(?,?,?,?,?,?,'published',?,?,?)", modId, metadata.name, metadata.creator, metadata.type, JSON.stringify(metadata), store.search(metadata), versionId, now, now));
     statements.push(store.statement('INSERT INTO versions VALUES(?,?,?,?,?,?,?,?,?)', versionId, modId, '', '', input.filename, input.size, input.sha256, `github-releases|github:${input.assetId}`, now));
     statements.push(store.statement('INSERT INTO audit VALUES(?,?,?,?,?,?)', crypto.randomUUID(), input.ownerId, 'import_mod', modId, JSON.stringify({ filename: input.filename, releaseId: input.releaseId, assetId: input.assetId }), now));
     await env.DB.batch(statements); return json({ ok: true, modId });
@@ -95,12 +128,31 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   if (path === '/api/v1/auth/recheck-membership' && method === 'POST') return json(publicUser(await auth.require(request, false, true)));
   if (path === '/api/v1/auth/logout' && method === 'POST') { await store.run('UPDATE sessions SET revoked_at=? WHERE hash=?', Date.now(), user.sessionHash); return json({ ok: true }); }
   if ((path === '/api/v1/mods' || path === '/api/v1/admin/mods') && method === 'GET') return json(await store.list(querySchema.parse(Object.fromEntries(url.searchParams)), path.startsWith('/api/v1/admin/')));
+  if (path === '/api/v1/mods/brands' && method === 'GET') return json((await store.all("SELECT DISTINCT trim(coalesce(json_extract(metadata,'$.manufacturer'),'')) brand FROM mods WHERE deleted_at IS NULL AND status='published' AND type='car' ORDER BY brand COLLATE NOCASE")).map(row => row.brand));
   if (path === '/api/v1/mods/favorites' && method === 'GET') return json(await store.list(querySchema.parse(Object.fromEntries(url.searchParams)), false, z.array(idSchema).max(500).parse(url.searchParams.get('ids')?.split(',').filter(Boolean) || [])));
   const detail = match(/^\/api\/v1\/mods\/([^/]+)$/);
   if (detail && method === 'GET') return json(await store.requireMod(idSchema.parse(detail[1]), user.admin));
   const versions = match(/^\/api\/v1\/mods\/([^/]+)\/versions$/);
   if (versions && method === 'GET') { const id = idSchema.parse(versions[1]); await store.requireMod(id, user.admin); return json((await store.all('SELECT * FROM versions WHERE mod_id=? ORDER BY created_at DESC', id)).map(v => store.version(v))); }
   const review = match(/^\/api\/v1\/mods\/([^/]+)\/reviews(?:\/([^/]+))?$/);
+  const report = match(/^\/api\/v1\/mods\/([^/]+)\/reports$/);
+  if (report && method === 'POST') {
+    const id = idSchema.parse(report[1]), mod = await store.requireMod(id, user.admin);
+    if (mod.type !== 'car') throw new HubError('INVALID_REPORT', 'Select a car to report.');
+    await rate(store, request, `report:${user.id}`, 5);
+    const input = z.object({ body: z.string().trim().min(5).max(2000) }).parse(await body(request)), now = Date.now();
+    const previous = await store.get("SELECT id FROM reports WHERE mod_id=? AND user_id=? AND status='open'", id, user.id);
+    const reportId = previous?.id || crypto.randomUUID();
+    await store.run("INSERT INTO reports VALUES(?,?,?,?,'open',?,?) ON CONFLICT(mod_id,user_id) WHERE status='open' DO UPDATE SET body=excluded.body,updated_at=excluded.updated_at", reportId, id, user.id, input.body, now, now);
+    return json({ id: reportId, status: 'open' });
+  }
+  if (path === '/api/v1/admin/reports' && method === 'GET') return json(await store.all('SELECT r.*,m.name mod_name,u.name reporter_name FROM reports r JOIN mods m ON m.id=r.mod_id JOIN users u ON u.id=r.user_id ORDER BY r.status ASC,r.updated_at DESC LIMIT 200'));
+  const reportAction = match(/^\/api\/v1\/admin\/reports\/([^/]+)$/);
+  if (reportAction && method === 'PATCH') {
+    const id = idSchema.parse(reportAction[1]), input = z.object({ status: z.enum(['open', 'resolved']) }).parse(await body(request));
+    if (!await store.get('SELECT id FROM reports WHERE id=?', id)) throw new HubError('NOT_FOUND', 'The report is not available.', 404);
+    await store.run('UPDATE reports SET status=?,updated_at=? WHERE id=?', input.status, Date.now(), id); await store.audit(user.id, 'review_report', id, { status: input.status }); return json({ ok: true });
+  }
   if (review) {
     const id = idSchema.parse(review[1]); await store.requireMod(id, user.admin);
     if (method === 'GET') { const summary = await store.get('SELECT count(*) count,avg(rating) average FROM reviews WHERE mod_id=?', id); return json({ average: summary?.average ?? null, count: Number(summary?.count || 0), items: await store.all('SELECT r.user_id AS userId,u.name,r.rating,r.body,r.created_at AS createdAt,r.updated_at AS updatedAt FROM reviews r JOIN users u ON u.id=r.user_id WHERE r.mod_id=? ORDER BY r.updated_at DESC LIMIT 100', id) }); }
@@ -192,7 +244,7 @@ export default {
   async fetch(request: Request, env: Env) {
     let response: Response;
     try { response = await handle(request, env); }
-    catch (error) { const status = error instanceof HubError ? error.status : error instanceof ZodError || error instanceof SyntaxError ? 400 : 500; response = json({ error: { code: error instanceof HubError ? error.code : status === 400 ? 'INVALID_INPUT' : 'REQUEST_FAILED', message: error instanceof HubError ? error.message : status === 400 ? 'Check the entered details.' : 'The request could not be completed.' } }, status); }
+    catch (error) { const status = error instanceof HubError ? error.status : error instanceof ZodError || error instanceof SyntaxError ? 400 : 500; if (status === 500) console.error(JSON.stringify({ route: new URL(request.url).pathname, type: error instanceof Error ? error.name : 'Error', detail: error instanceof Error ? error.message.slice(0, 240).replace(/Bearer\s+\S+/gi, 'Bearer [redacted]') : 'Unexpected failure' })); response = json({ error: { code: error instanceof HubError ? error.code : status === 400 ? 'INVALID_INPUT' : 'REQUEST_FAILED', message: error instanceof HubError ? error.message : status === 400 ? 'Check the entered details.' : 'The request could not be completed.' } }, status); }
     const headers = new Headers(response.headers); headers.set('x-content-type-options', 'nosniff'); headers.set('cache-control', 'no-store'); headers.set('referrer-policy', 'no-referrer');
     return new Response(response.body, { status: response.status, headers });
   },

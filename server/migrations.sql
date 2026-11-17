@@ -16,3 +16,6 @@ CREATE INDEX IF NOT EXISTS downloads_mod ON download_tickets(mod_id,completed_at
 CREATE TABLE IF NOT EXISTS announcements(id TEXT PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,published_at INTEGER NOT NULL,expires_at INTEGER);
 CREATE TABLE IF NOT EXISTS audit(id TEXT PRIMARY KEY,actor_id TEXT NOT NULL,action TEXT NOT NULL,target_id TEXT,detail TEXT NOT NULL,created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS reviews(mod_id TEXT NOT NULL REFERENCES mods(id),user_id TEXT NOT NULL REFERENCES users(id),rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),body TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(mod_id,user_id));
+CREATE TABLE IF NOT EXISTS reports(id TEXT PRIMARY KEY,mod_id TEXT NOT NULL REFERENCES mods(id),user_id TEXT NOT NULL REFERENCES users(id),body TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved')),created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS reports_inbox ON reports(status,updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS reports_open_member ON reports(mod_id,user_id) WHERE status='open';

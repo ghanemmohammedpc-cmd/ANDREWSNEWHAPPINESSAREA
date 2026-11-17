@@ -22,14 +22,15 @@ export class Store {
     if (!row || !admin && row.status !== 'published') throw new HubError('NOT_FOUND', 'This mod is not available.', 404);
     return this.mod(row);
   }
-  async list(query: { q: string; type: string; tag: string; sort: string; page: number; limit: number }, admin = false, favorites?: string[]) {
+  async list(query: { q: string; type: string; tag: string; brand?: string; sort: string; page: number; limit: number }, admin = false, favorites?: string[]) {
     const conditions = ['deleted_at IS NULL'], args: unknown[] = [];
     if (!admin) conditions.push("status='published'");
     if (favorites) { conditions.push(favorites.length ? `id IN (${favorites.map(() => '?').join(',')})` : '0'); args.push(...favorites); }
     if (query.type !== 'all') { conditions.push('type=?'); args.push(query.type); }
+    if (query.brand) { if (query.brand === '__unknown__') conditions.push("trim(coalesce(json_extract(metadata,'$.manufacturer'),''))=''"); else { conditions.push("json_extract(metadata,'$.manufacturer')=? COLLATE NOCASE"); args.push(query.brand); } }
     if (query.q) { conditions.push("search LIKE ? ESCAPE '\\'"); args.push(`%${normalizedSearch(query.q).replace(/[\\%_]/g, '\\$&')}%`); }
     if (query.tag) { conditions.push("EXISTS(SELECT 1 FROM json_each(json_extract(mods.metadata,'$.tags')) WHERE value=?)"); args.push(query.tag); }
-    const where = conditions.join(' AND '), sort = { name: 'name COLLATE NOCASE,id', size: '(SELECT size FROM versions WHERE id=active_version) DESC,id', downloads: "(SELECT count(*) FROM download_tickets WHERE mod_id=mods.id AND result='completed') DESC,id", newest: 'updated_at DESC,id' }[query.sort] || 'updated_at DESC,id';
+    const where = conditions.join(' AND '), sort = { brand: "CASE WHEN trim(coalesce(json_extract(metadata,'$.manufacturer'),''))='' THEN 1 ELSE 0 END,json_extract(metadata,'$.manufacturer') COLLATE NOCASE,name COLLATE NOCASE,id", name: 'name COLLATE NOCASE,id', size: '(SELECT size FROM versions WHERE id=active_version) DESC,id', downloads: "(SELECT count(*) FROM download_tickets WHERE mod_id=mods.id AND result='completed') DESC,id", newest: 'updated_at DESC,id' }[query.sort] || 'updated_at DESC,id';
     const total = Number((await this.get(`SELECT count(*) n FROM mods WHERE ${where}`, ...args))?.n || 0);
     const rows = await this.all(`${this.select} WHERE ${where} ORDER BY ${sort} LIMIT ? OFFSET ?`, ...args, query.limit, (query.page - 1) * query.limit);
     return { items: await Promise.all(rows.map(row => this.mod(row))), total, page: query.page, limit: query.limit };

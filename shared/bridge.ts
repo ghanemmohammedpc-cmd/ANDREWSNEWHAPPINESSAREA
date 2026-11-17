@@ -2,7 +2,7 @@ import type { Mod, Progress, Settings, UploadInput, User } from './schema';
 import type { Installed } from '../desktop/installer';
 export type Selection = { id: string; name: string; size: number };
 export type Bootstrap = { connected: boolean; configured: boolean; user: User | null; serverUrl: string; language: 'ar' | 'en'; adminLanguage: 'ar' | 'en'; inviteUrl: string; error?: string; version: string };
-export type Action = 'mods:list' | 'mods:favorites' | 'mods:detail' | 'mods:versions' | 'mods:reviews' | 'mods:review' | 'mods:deleteReview' | 'announcements:list' | 'admin:stats' | 'admin:mods' | 'admin:update' | 'admin:publish' | 'admin:unpublish' | 'admin:delete' | 'admin:media' | 'admin:audit' | 'admin:announcements' | 'admin:announce' | 'admin:deleteAnnouncement' | 'admin:storage' | 'admin:imports';
+export type Action = 'mods:list' | 'mods:brands' | 'mods:favorites' | 'mods:detail' | 'mods:versions' | 'mods:reviews' | 'mods:report' | 'mods:review' | 'mods:deleteReview' | 'announcements:list' | 'admin:stats' | 'admin:reports' | 'admin:reviewReport' | 'admin:mods' | 'admin:update' | 'admin:publish' | 'admin:unpublish' | 'admin:delete' | 'admin:media' | 'admin:audit' | 'admin:announcements' | 'admin:announce' | 'admin:deleteAnnouncement' | 'admin:storage' | 'admin:imports';
 export interface HubBridge {
   bootstrap(): Promise<Bootstrap>;
   connect(url: string): Promise<Bootstrap>;

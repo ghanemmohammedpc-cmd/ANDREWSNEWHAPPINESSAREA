@@ -13,6 +13,7 @@ export const metadataSchema = z.object({
   permissionNotes: z.string().trim().max(2000).default(''),
   thumbnailId: idSchema.nullable().default(null),
   featured: z.boolean().default(false),
+  lightingUpdated: z.boolean().default(false),
 });
 export const uploadSchema = z.object({
   modId: idSchema.optional(),
@@ -27,7 +28,7 @@ export const uploadSchema = z.object({
 });
 export const querySchema = z.object({
   q: z.string().max(200).default(''), type: z.enum(['car', 'map', 'addon', 'all']).default('all'),
-  tag: z.string().max(40).default(''), sort: z.enum(['newest', 'name', 'size', 'downloads']).default('newest'),
+  tag: z.string().max(40).default(''), brand: z.string().max(80).default(''), sort: z.enum(['newest', 'name', 'brand', 'size', 'downloads']).default('newest'),
   page: z.coerce.number().int().min(1).max(100000).default(1), limit: z.coerce.number().int().min(1).max(60).default(24),
 });
 export type ModMetadata = z.infer<typeof metadataSchema>;

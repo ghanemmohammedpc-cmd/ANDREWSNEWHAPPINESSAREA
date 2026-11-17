@@ -6,7 +6,7 @@ export class GitHub {
   headers(extra: Record<string, string> = {}) { return { accept: 'application/vnd.github+json', authorization: `Bearer ${this.env.GITHUB_TOKEN}`, 'x-github-api-version': '2026-03-10', 'user-agent': 'TeamRazkaProgram', ...extra }; }
   async request(path: string, init: RequestInit = {}) {
     if (path !== '' && !path.startsWith('/') || path.includes('..')) throw new HubError('INVALID_ASSET', 'Unsupported GitHub request.');
-    const r = await fetch(`https://api.github.com/repos/${this.env.GITHUB_REPOSITORY}${path}`, { ...init, headers: this.headers(Object.fromEntries(new Headers(init.headers))), redirect: 'error', signal: init.signal || AbortSignal.timeout(25000) });
+    const r = await fetch(`https://api.github.com/repos/${this.env.GITHUB_REPOSITORY}${path}`, { ...init, headers: this.headers(Object.fromEntries(new Headers(init.headers))), redirect: 'manual', signal: init.signal || AbortSignal.timeout(25000) });
     if (!r.ok) throw new HubError('STORAGE_UNAVAILABLE', `GitHub could not complete this request (${r.status}).`, 502);
     return r;
   }
@@ -22,7 +22,7 @@ export class GitHub {
   async createUpload(id: string, title: string, description: string) { return this.json('/releases', 'POST', { tag_name: `upload-${id}`, name: title, body: description, draft: true, prerelease: false }); }
   async uploadPart(releaseId: string, index: number, body: ReadableStream<Uint8Array>, size: number) {
     const name = `part-${String(index).padStart(6, '0')}`;
-    const r = await fetch(`https://uploads.github.com/repos/${this.env.GITHUB_REPOSITORY}/releases/${releaseId}/assets?name=${name}`, { method: 'POST', headers: this.headers({ 'content-type': 'application/octet-stream', 'content-length': String(size) }), body, duplex: 'half', redirect: 'error' } as RequestInit);
+    const r = await fetch(`https://uploads.github.com/repos/${this.env.GITHUB_REPOSITORY}/releases/${releaseId}/assets?name=${name}`, { method: 'POST', headers: this.headers({ 'content-type': 'application/octet-stream', 'content-length': String(size) }), body, duplex: 'half', redirect: 'manual' } as RequestInit);
     if (!r.ok) throw new HubError('STORAGE_UNAVAILABLE', `GitHub did not accept this upload part (${r.status}).`, 502);
     return r.json() as Promise<{ id: number; size: number; digest?: string }>;
   }

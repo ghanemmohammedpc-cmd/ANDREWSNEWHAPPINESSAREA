@@ -23,6 +23,9 @@ importers:
       fastify:
         specifier: 5.12.8
         version: 5.12.8
+      json5:
+        specifier: 2.2.3
+        version: 2.2.3
       lucide-react:
         specifier: 1.73.0
         version: 1.73.0(@types/react@19.3.0)(react@19.3.1)

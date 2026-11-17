@@ -1,5 +1,6 @@
 import yauzl from 'yauzl';
 import path from 'node:path';
+import JSON5 from 'json5';
 export async function inspectMod(file: string): Promise<{ creator: string; type: 'car' | 'map' | 'addon'; manufacturer: string; model: string; years: string }> {
   const suffix = / - ([^/]+)\.zip$/i.exec(path.basename(file))?.[1]?.trim();
   const result = { creator: suffix && !/^\d/.test(suffix) ? suffix : 'Unknown', type: 'addon' as 'car' | 'map' | 'addon', manufacturer: '', model: '', years: /\b(?:19|20)\d{2}(?:\s*-\s*(?:19|20)\d{2})?\b/.exec(path.basename(file))?.[0] || '' };
@@ -8,7 +9,8 @@ export async function inspectMod(file: string): Promise<{ creator: string; type:
     let inspected = 0;
     zip.on('error', reject);
     zip.on('entry', entry => {
-      if (/^vehicles\//i.test(entry.fileName)) result.type = 'car'; else if (/^levels\//i.test(entry.fileName)) result.type = 'map';
+      if (/^levels\//i.test(entry.fileName)) result.type = 'map';
+      else if (result.type !== 'map' && /^vehicles\/(?!common\/)[^/]+\/info\.json$/i.test(entry.fileName)) result.type = 'car';
       if (inspected >= 8 || entry.uncompressedSize > 512000 || !/^(vehicles|levels)\/[^/]+\/info\.json$/i.test(entry.fileName)) { zip.readEntry(); return; }
       inspected++;
       zip.openReadStream(entry, (streamError, stream) => {
@@ -18,16 +20,17 @@ export async function inspectMod(file: string): Promise<{ creator: string; type:
         stream.on('error', () => zip.readEntry());
         stream.on('end', () => {
           try {
-            const data = JSON.parse(Buffer.concat(chunks).toString('utf8').replace(/^\uFEFF/, ''));
+            const data = JSON5.parse(Buffer.concat(chunks).toString('utf8').replace(/^\uFEFF/, ''));
             const author = data.Authors || data.Author || data.authors || data.author;
             if (result.creator === 'Unknown' && typeof author === 'string' && author.trim() && !/^(beamng(?:\.drive)?|njm|unknown)$/i.test(author.trim())) result.creator = author.trim().slice(0, 120);
             if (typeof data.Brand === 'string') result.manufacturer = data.Brand.slice(0, 80);
             if (typeof data.Name === 'string') result.model = data.Name.slice(0, 100);
+            if (!result.years) { const years = data.Years || data.years; if (years && Number.isInteger(years.min) && Number.isInteger(years.max) && years.min >= 1885 && years.max <= 2100 && years.min <= years.max) result.years = years.min === years.max ? String(years.min) : `${years.min} - ${years.max}`; }
           } catch {}
           zip.readEntry();
         });
       });
     });
-    zip.on('end', () => resolve(result)); zip.readEntry();
+    zip.on('end', () => { if (/wheel|rim|engine.pack|license.plate|passenger|universal.dummy|weapons|معزز/i.test(path.basename(file))) result.type = 'addon'; resolve(result); }); zip.readEntry();
   }));
 }

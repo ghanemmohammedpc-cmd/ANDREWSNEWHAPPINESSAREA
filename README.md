@@ -2,6 +2,8 @@
 
 Windows BeamNG mod library with Arabic and English, Discord membership verification, and owner administration.
 
+Download the [Windows installer or portable program](https://github.com/ghanemmohammedpc-cmd/ANDREWSNEWHAPPINESSAREA/releases/tag/program-0.1.1).
+
 ## Current build
 
 - Discord sign-in and owner access have been verified in the running Windows app.
@@ -10,6 +12,9 @@ Windows BeamNG mod library with Arabic and English, Discord membership verificat
 - Membership is checked again at least once per minute during API use, and before downloads and sensitive owner actions.
 - Uploads preserve mod names, creator names and ZIP filenames. Identical ZIPs are rejected even when renamed.
 - Downloads support cancellation and resuming. ZIP structure, entry CRCs, size and SHA-256 are checked before installation.
+- The default installation folder is BeamNG.drive's `current/mods/repo`. Cars, Maps and Extra have separate sections; car listings can be filtered and sorted by brand.
+- Members can report a car to the owner. Reports are private to the reporter and the owner administration service; the owner's dashboard supports resolving and reopening them.
+- Verified material lighting updates carry the Team Razka lighting credit and `(0.40 update)` label.
 - Replacing an existing ZIP requires confirmation and makes a verified backup. Uninstall only removes unchanged files installed by the program.
 - The catalog starts empty. No sample listings, ratings, download counts or files are published automatically.
 
@@ -38,7 +43,7 @@ pnpm exec tsx scripts/inventory-collection.ts 'E:/leaked mods'
 pnpm exec tsx scripts/publish-collection.ts
 ```
 
-The ignored data/collection journals record validation, names, sizes, SHA-256, archive fingerprints, creator evidence, actual thumbnails and publication status. Matching existing assets are imported without changing them. Failed archives are reported for attention.
+The ignored data/collection journals record validation, names, sizes, SHA-256, archive fingerprints, creator evidence, actual thumbnails and publication status. Matching existing assets are imported without changing them. Failed archives are reported for attention. Prepared replacements add a new version to the existing listing; earlier release assets remain available.
 
 Cloudflare secrets hold the Discord credentials, session key, owner allowlist, GitHub token and publication callback key. The GitHub workflow receives only its scoped workflow token and callback secret. Neither is included in the EXE.
 

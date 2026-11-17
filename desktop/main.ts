@@ -86,14 +86,18 @@ async function resource(action: Action, payload: any = {}) {
   const list = () => new URLSearchParams(Object.entries(querySchema.parse(payload)).map(([k, v]) => [k, String(v)])).toString();
   switch (action) {
     case 'mods:list': return api(`/api/v1/mods?${list()}`);
+    case 'mods:brands': return api('/api/v1/mods/brands');
     case 'mods:favorites': { const ids = z.array(idSchema).max(500).parse(payload.ids); return api(`/api/v1/mods/favorites?${list()}&ids=${encodeURIComponent(ids.join(','))}`); }
     case 'mods:detail': return api(`/api/v1/mods/${id()}`);
     case 'mods:versions': return api(`/api/v1/mods/${id()}/versions`);
     case 'mods:reviews': return api(`/api/v1/mods/${id()}/reviews`);
+    case 'mods:report': return api(`/api/v1/mods/${id()}/reports`, 'POST', z.object({ body: z.string().trim().min(5).max(2000) }).parse(payload));
     case 'mods:review': return api(`/api/v1/mods/${id()}/reviews`, 'PUT', z.object({ rating: z.number().int().min(1).max(5), body: z.string().max(2000) }).parse(payload));
     case 'mods:deleteReview': return api(`/api/v1/mods/${id()}/reviews/${z.string().regex(/^\d{15,22}$/).parse(payload.userId)}`, 'DELETE');
     case 'announcements:list': return api('/api/v1/announcements');
     case 'admin:stats': return api('/api/v1/admin/stats');
+    case 'admin:reports': return api('/api/v1/admin/reports');
+    case 'admin:reviewReport': return api(`/api/v1/admin/reports/${id()}`, 'PATCH', z.object({ status: z.enum(['open', 'resolved']) }).parse(payload));
     case 'admin:mods': return api(`/api/v1/admin/mods?${list()}`);
     case 'admin:update': return api(`/api/v1/admin/mods/${id()}`, 'PATCH', metadataSchema.parse(payload.metadata));
     case 'admin:publish': return api(`/api/v1/admin/mods/${id()}/publish`, 'POST', {});
@@ -222,6 +226,8 @@ app.whenReady().then(async () => {
   await mkdir(dataDir, { recursive: true });
   const connection = await readJson<{ serverUrl: string }>(path.join(root, 'dist', 'desktop', 'connection.json'), { serverUrl: '' });
   settings = z.object({ serverUrl: z.string().max(2048), modsFolder: z.string().max(32768), language: z.enum(['ar', 'en']), adminLanguage: z.enum(['ar', 'en']).default('en'), parallelDownloads: z.number().int().min(1).max(3) }).parse(await readJson<Settings>(settingsFile, { serverUrl: process.env.PUBLIC_API_BASE_URL || connection.serverUrl, modsFolder: await discoverModsFolder(), language: 'ar', adminLanguage: 'en', parallelDownloads: 2 }));
+  const detectedRepo = await discoverModsFolder();
+  if (path.resolve(settings.modsFolder).toLowerCase() === path.dirname(detectedRepo).toLowerCase()) { settings.modsFolder = detectedRepo; await mkdir(detectedRepo, { recursive: true }); await writeJson(settingsFile, settings); }
   if (app.isPackaged && connection.serverUrl.startsWith('https:') && /^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(settings.serverUrl)) { settings.serverUrl = connection.serverUrl; await writeJson(settingsFile, settings); }
   if (settings.serverUrl) settings.serverUrl = baseUrl(settings.serverUrl);
   try { const stored = JSON.parse(safeStorage.decryptString(await readFile(sessionFile))); if (stored.serverUrl === settings.serverUrl && stored.token) token = sessionTokenSchema.parse(stored.token); } catch {}

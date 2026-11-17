@@ -43,7 +43,7 @@ export async function discoverModsFolder(base = process.env.LOCALAPPDATA || path
       userFolder = path.resolve(path.dirname(ini), value);
     }
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-  return path.join(userFolder, 'mods');
+  return path.join(userFolder, 'mods', 'repo');
 }
 export function checkedTarget(folder: string, filename: string) {
   safeFilename(filename); const root = path.resolve(folder), result = path.resolve(root, filename);
