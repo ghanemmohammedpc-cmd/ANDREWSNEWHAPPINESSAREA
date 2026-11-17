@@ -1,0 +1,11 @@
+{
+  "name": "team-razka-program",
+  "main": "index.ts",
+  "account_id": "8865fc98ae9f0c7347edfde9559d006b",
+  "compatibility_date": "2026-11-16",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "d1_databases": [{ "binding": "DB", "database_name": "team-razka-program", "database_id": "076a1c33-a515-4229-bb24-4bfbe4944909", "migrations_dir": "migrations" }],
+  "vars": { "GITHUB_REPOSITORY": "ghanemmohammedpc-cmd/ANDREWSNEWHAPPINESSAREA", "DISCORD_CLIENT_ID": "1571942024670613604", "DISCORD_GUILD_ID": "1526419276716576909", "DISCORD_INVITE_URL": "https://discord.gg/DHF4akrWmr" },
+  "observability": { "enabled": false }
+}

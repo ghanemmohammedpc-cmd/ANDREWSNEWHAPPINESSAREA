@@ -1,0 +1,18 @@
+PRAGMA foreign_keys=ON;
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS schema_versions(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+INSERT OR IGNORE INTO schema_versions VALUES(1,unixepoch()*1000);
+CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT NOT NULL,avatar TEXT,verified_at INTEGER NOT NULL,access_token TEXT,refresh_token TEXT,token_expires INTEGER,mode TEXT NOT NULL DEFAULT 'discord');
+CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,revoked_at INTEGER);
+CREATE TABLE IF NOT EXISTS pairing(state_hash TEXT PRIMARY KEY,poll_hash TEXT UNIQUE NOT NULL,verifier TEXT NOT NULL,expires_at INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending',session_token TEXT,error_code TEXT);
+CREATE TABLE IF NOT EXISTS media(id TEXT PRIMARY KEY,key TEXT NOT NULL,mime TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,owner_id TEXT NOT NULL,created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS mods(id TEXT PRIMARY KEY,name TEXT NOT NULL,creator TEXT NOT NULL,type TEXT NOT NULL,metadata TEXT NOT NULL,search TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'draft',active_version TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,deleted_at INTEGER);
+CREATE INDEX IF NOT EXISTS mods_catalog ON mods(status,type,updated_at);
+CREATE TABLE IF NOT EXISTS versions(id TEXT PRIMARY KEY,mod_id TEXT NOT NULL REFERENCES mods(id),version TEXT NOT NULL,changelog TEXT NOT NULL,filename TEXT NOT NULL,size INTEGER NOT NULL,sha256 TEXT NOT NULL,storage_key TEXT NOT NULL,created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS versions_mod ON versions(mod_id,created_at);
+CREATE TABLE IF NOT EXISTS uploads(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,metadata TEXT NOT NULL,status TEXT NOT NULL,bytes INTEGER NOT NULL DEFAULT 0,error_code TEXT,mod_id TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS download_tickets(id TEXT PRIMARY KEY,session_hash TEXT NOT NULL,user_id TEXT NOT NULL,mod_id TEXT NOT NULL,version_id TEXT NOT NULL,expires_at INTEGER NOT NULL,transferred_at INTEGER,completed_at INTEGER,bytes INTEGER NOT NULL DEFAULT 0,result TEXT,error_code TEXT);
+CREATE INDEX IF NOT EXISTS downloads_mod ON download_tickets(mod_id,completed_at);
+CREATE TABLE IF NOT EXISTS announcements(id TEXT PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,published_at INTEGER NOT NULL,expires_at INTEGER);
+CREATE TABLE IF NOT EXISTS audit(id TEXT PRIMARY KEY,actor_id TEXT NOT NULL,action TEXT NOT NULL,target_id TEXT,detail TEXT NOT NULL,created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS reviews(mod_id TEXT NOT NULL REFERENCES mods(id),user_id TEXT NOT NULL REFERENCES users(id),rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),body TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(mod_id,user_id));

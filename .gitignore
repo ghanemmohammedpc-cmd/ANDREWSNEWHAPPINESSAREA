@@ -1,0 +1,13 @@
+node_modules/
+dist/
+release/
+.env
+data/
+*.sqlite*
+test-results/
+playwright-report/
+*.log
+
+.wrangler/
+.dev.vars*
+cloudflare/.dev.vars*
