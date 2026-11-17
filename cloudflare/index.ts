@@ -38,6 +38,13 @@ async function downloadAllocation(store: Store, env: Env, ticketId: string) {
 }
 export async function handle(request: Request, env: Env, context?: StreamContext): Promise<Response> {
   const url = new URL(request.url), origin = env.APP_BASE_URL || url.origin, path = url.pathname, method = request.method;
+  if (!path.startsWith('/api/')) {
+    if (!env.ASSETS || !['GET', 'HEAD'].includes(method)) return new Response('Not found', { status: 404 });
+    const target = new URL(url); if (path === '/download' || path === '/download/') target.pathname = '/';
+    const asset = await env.ASSETS.fetch(new Request(target, request)), headers = new Headers(asset.headers);
+    headers.set('content-security-policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    return new Response(asset.body, { status: asset.status, headers });
+  }
   const store = new Store(env.DB), auth = new Auth(env, store, origin), github = new GitHub(env);
   const match = (pattern: RegExp) => pattern.exec(path);
   const originHeader = request.headers.get('origin');

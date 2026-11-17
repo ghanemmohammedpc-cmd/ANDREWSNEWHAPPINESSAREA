@@ -2,6 +2,7 @@ import { HubError, normalizedSearch, type ModMetadata } from '../shared/schema';
 export interface Statement { bind(...values: unknown[]): Statement; first<T = Record<string, any>>(): Promise<T | null>; all<T = Record<string, any>>(): Promise<{ results: T[] }>; run(): Promise<unknown>; }
 export interface Database { prepare(sql: string): Statement; batch(statements: Statement[]): Promise<unknown[]>; }
 export interface Env {
+  ASSETS?: { fetch(request: Request): Promise<Response> };
   DOWNLOAD_BANDWIDTH_BYTES_PER_SECOND?: string;
   DB: Database; APP_BASE_URL?: string; DISCORD_REDIRECT_URI?: string; SESSION_SECRET: string; DISCORD_CLIENT_ID: string; DISCORD_CLIENT_SECRET: string; DISCORD_BOT_TOKEN: string; DISCORD_GUILD_ID: string; DISCORD_REQUIRED_ROLE_ID?: string; ADMIN_DISCORD_IDS: string; DISCORD_INVITE_URL: string; GITHUB_REPOSITORY: string; GITHUB_TOKEN: string; PUBLISH_CALLBACK_SECRET: string;
 }

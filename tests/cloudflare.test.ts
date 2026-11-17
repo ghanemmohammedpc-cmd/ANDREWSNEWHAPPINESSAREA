@@ -26,6 +26,14 @@ beforeEach(() => {
   }));
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); sqlite.close(); });
+it('serves the public download page while keeping the mod API behind Discord sign-in', async () => {
+  env.ASSETS = { fetch: vi.fn(async () => new Response('<h1>Team Razka Program</h1>', { headers: { 'content-type': 'text/html' } })) };
+  const page = await request('/'); expect(page.status).toBe(200); expect(await page.text()).toContain('Team Razka Program');
+  expect(page.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+  expect((await request('/download')).status).toBe(200);
+  expect((await request('/api/v1/mods')).status).toBe(401);
+  expect(env.ASSETS.fetch).toHaveBeenCalledTimes(2);
+});
 it('limits connection setup time without aborting a slow download after headers arrive', async () => {
   vi.useFakeTimers(); let signal: AbortSignal | undefined;
   vi.stubGlobal('fetch', vi.fn(async (_url: string, options: RequestInit) => { signal = options.signal!; return new Response('data'); }));
