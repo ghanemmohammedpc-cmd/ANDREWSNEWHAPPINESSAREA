@@ -25,13 +25,30 @@ beforeEach(() => {
     throw new Error(`Unexpected network request: ${url}`);
   }));
 });
-afterEach(() => { vi.unstubAllGlobals(); sqlite.close(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); sqlite.close(); });
+it('limits connection setup time without aborting a slow download after headers arrive', async () => {
+  vi.useFakeTimers(); let signal: AbortSignal | undefined;
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, options: RequestInit) => { signal = options.signal!; return new Response('data'); }));
+  const response = await new GitHub(env).download('12');
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(signal!.aborted).toBe(false); expect(await response.text()).toBe('data');
+});
+it('filters body categories without mixing vehicle sections', async () => {
+  const { token } = await login();
+  for (const [type, tags] of [['car', ['sedan']], ['car', ['pickup']], ['map', ['sedan']]] as const) {
+    const id = await listing(), row = await store.get('SELECT metadata FROM mods WHERE id=?', id), metadata = { ...JSON.parse(row!.metadata), type, tags };
+    await store.run('UPDATE mods SET type=?,metadata=? WHERE id=?', type, JSON.stringify(metadata), id);
+  }
+  const result = await (await request('/api/v1/mods?type=car&tag=sedan', 'GET', token)).json() as any;
+  expect(result.total).toBe(1); expect(result.items[0].tags).toEqual(['sedan']); expect(result.items[0].type).toBe('car');
+});
 it('shares the download pool across active leases and releases abandoned allocations', async () => {
   const { token } = await login(), modId = await listing(), versionId = crypto.randomUUID(), first = crypto.randomUUID(), second = crypto.randomUUID(), now = Date.now();
   await store.run('INSERT INTO versions VALUES(?,?,?,?,?,?,?,?,?)', versionId, modId, '', '', 'Car.zip', 100, 'a'.repeat(64), 'github:12', now);
   for (const id of [first, second]) await store.run('INSERT INTO download_tickets(id,session_hash,user_id,mod_id,version_id,expires_at,lease_expires_at) VALUES(?,?,?,?,?,?,?)', id, await hash(token), owner, modId, versionId, now + 60000, now + 20000);
   expect((await request(`/api/v1/downloads/${first}/pace`, 'POST')).status).toBe(401);
   expect(await (await request(`/api/v1/downloads/${first}/pace`, 'POST', token, {})).json()).toEqual({ bytesPerSecond: 10000000 });
+  expect((await store.get('SELECT expires_at FROM download_tickets WHERE id=?', first))!.expires_at).toBeGreaterThan(now + 1700000);
   await store.run('UPDATE download_tickets SET lease_expires_at=? WHERE id=?', now - 1, second);
   expect(await (await request(`/api/v1/downloads/${first}/pace`, 'POST', token, {})).json()).toEqual({ bytesPerSecond: 20000000 });
   const other = await login(member);

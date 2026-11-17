@@ -39,7 +39,10 @@ export class GitHub {
       if (parsed.protocol !== 'https:' || !['api.github.com', 'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'].includes(parsed.hostname)) throw new HubError('UNSAFE_DOWNLOAD', 'GitHub returned an unsupported download address.', 502);
       const headers: Record<string, string> = parsed.hostname === 'api.github.com' ? this.headers({ accept: 'application/octet-stream' }) : { 'user-agent': 'TeamRazkaProgram' };
       if (range) headers.range = range;
-      const r = await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(1800000) });
+      const connection = new AbortController(), timeout = setTimeout(() => connection.abort(), 25000);
+      let r: Response;
+      try { r = await fetch(url, { headers, redirect: 'manual', signal: connection.signal }); }
+      finally { clearTimeout(timeout); }
       if (r.status >= 300 && r.status < 400 && r.headers.get('location')) { await r.body?.cancel(); url = new URL(r.headers.get('location')!, url).toString(); continue; }
       if (!r.ok || !r.body || r.headers.get('content-type')?.includes('application/json')) throw new HubError('STORAGE_UNAVAILABLE', 'GitHub could not stream the file.', 502);
       return r;

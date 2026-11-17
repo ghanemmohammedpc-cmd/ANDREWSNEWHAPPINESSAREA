@@ -140,7 +140,7 @@ async function uploadMod(id: string, input: Omit<UploadInput, 'filename' | 'size
     try {
       await validateArchive(file.file); const sha256 = await fileHash(file.file);
       const detected = await inspectMod(file.file);
-      input = { ...input, metadata: { ...input.metadata, creator: input.metadata.creator && input.metadata.creator !== 'Unknown' ? input.metadata.creator : detected.creator, type: detected.type, manufacturer: input.metadata.manufacturer || detected.manufacturer, model: input.metadata.model || detected.model, years: input.metadata.years || detected.years } };
+      input = { ...input, metadata: { ...input.metadata, creator: input.metadata.creator && input.metadata.creator !== 'Unknown' ? input.metadata.creator : detected.creator, type: detected.type, tags: input.metadata.tags.length ? input.metadata.tags : detected.tags, manufacturer: input.metadata.manufacturer || detected.manufacturer, model: input.metadata.model || detected.model, years: input.metadata.years || detected.years } };
       if (controller.signal.aborted) throw new HubError('CANCELLED', 'Upload cancelled.');
       const init = await api('/api/v1/admin/uploads/init', 'POST', { ...input, filename: file.name, size: file.size, sha256 }); uploads.get(jobId)!.serverId = init.id;
       if (init.chunkSize && init.partsPath && init.completePath) {
@@ -251,6 +251,6 @@ app.whenReady().then(async () => {
     } catch (error) { lastError = error instanceof HubError ? error.code : 'REQUEST_FAILED'; return { ok: false, error: { code: lastError, message: error instanceof HubError ? error.message : 'The request could not be completed.' } }; }
   });
   await createWindow();
-  setInterval(() => { if (user) ensureUser().catch(() => lock()); }, 30000).unref();
+  setInterval(() => { if (user) ensureUser().catch(() => {}); }, 30000).unref();
 });
 app.on('window-all-closed', () => { installer?.cancelAll(); for (const upload of uploads.values()) upload.controller.abort(); app.quit(); });

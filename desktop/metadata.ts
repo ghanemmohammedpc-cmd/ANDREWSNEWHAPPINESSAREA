@@ -1,9 +1,11 @@
 import yauzl from 'yauzl';
 import path from 'node:path';
 import JSON5 from 'json5';
-export async function inspectMod(file: string): Promise<{ creator: string; type: 'car' | 'map' | 'addon'; manufacturer: string; model: string; years: string }> {
+import { vehicleTags } from '../shared/vehicle-category';
+export async function inspectMod(file: string): Promise<{ creator: string; type: 'car' | 'map' | 'addon'; manufacturer: string; model: string; years: string; tags: string[] }> {
   const suffix = / - ([^/]+)\.zip$/i.exec(path.basename(file))?.[1]?.trim();
   const result = { creator: suffix && !/^\d/.test(suffix) ? suffix : 'Unknown', type: 'addon' as 'car' | 'map' | 'addon', manufacturer: '', model: '', years: /\b(?:19|20)\d{2}(?:\s*-\s*(?:19|20)\d{2})?\b/.exec(path.basename(file))?.[0] || '' };
+  const styles: string[] = [];
   return new Promise((resolve, reject) => yauzl.open(file, { lazyEntries: true }, (error, zip) => {
     if (error || !zip) { reject(error); return; }
     let inspected = 0;
@@ -24,6 +26,8 @@ export async function inspectMod(file: string): Promise<{ creator: string; type:
         stream.on('end', () => {
           try {
             const data = JSON5.parse(Buffer.concat(chunks).toString('utf8').replace(/^\uFEFF/, ''));
+            const style = data['Body Style'] || data.bodyStyle || data.body_style;
+            if (typeof style === 'string') styles.push(style);
             const author = data.Authors || data.Author || data.authors || data.author;
             if (result.creator === 'Unknown' && typeof author === 'string' && author.trim() && !/^(beamng(?:\.drive)?|njm|unknown)$/i.test(author.trim())) result.creator = author.trim().slice(0, 120);
             if (typeof data.Brand === 'string') result.manufacturer = data.Brand.slice(0, 80);
@@ -34,6 +38,6 @@ export async function inspectMod(file: string): Promise<{ creator: string; type:
         });
       });
     });
-    zip.on('end', () => { if (result.type !== 'map' && [...configurations].some(root => structures.has(root))) result.type = 'car'; if (/wheel|rim|engine.pack|license.plate|passenger|universal.dummy|weapons|معزز/i.test(path.basename(file))) result.type = 'addon'; resolve(result); }); zip.readEntry();
+    zip.on('end', () => { if (result.type !== 'map' && [...configurations].some(root => structures.has(root))) result.type = 'car'; if (/wheel|rim|engine.pack|license.plate|passenger|universal.dummy|weapons|معزز/i.test(path.basename(file))) result.type = 'addon'; resolve({ ...result, tags: result.type === 'car' ? vehicleTags(path.basename(file), styles) : [] }); }); zip.readEntry();
   }));
 }

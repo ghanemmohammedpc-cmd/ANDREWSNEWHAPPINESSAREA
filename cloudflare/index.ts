@@ -30,7 +30,7 @@ async function service(request: Request, env: Env) {
 }
 async function downloadAllocation(store: Store, env: Env, ticketId: string) {
   const now = Date.now();
-  await store.run('UPDATE download_tickets SET lease_expires_at=? WHERE id=? AND completed_at IS NULL AND transferred_at IS NULL', now + 20000, ticketId);
+  await store.run('UPDATE download_tickets SET lease_expires_at=?,expires_at=max(expires_at,?) WHERE id=? AND completed_at IS NULL AND transferred_at IS NULL', now + 20000, now + 1800000, ticketId);
   const row = await store.get('SELECT count(*) active FROM download_tickets WHERE lease_expires_at>? AND expires_at>? AND completed_at IS NULL AND transferred_at IS NULL', now, now);
   const configured = Number(env.DOWNLOAD_BANDWIDTH_BYTES_PER_SECOND || 20000000);
   const budget = Number.isSafeInteger(configured) && configured > 0 && configured <= 1000000000 ? configured : 20000000;
@@ -69,14 +69,14 @@ export async function handle(request: Request, env: Env, context?: StreamContext
   }
   if (path === '/api/v1/publish/metadata' && method === 'POST') {
     await service(request, env);
-    const input = z.object({ ownerId: z.string().regex(/^\d{15,22}$/), items: z.array(z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/), type: z.enum(['car', 'map', 'addon']), manufacturer: z.string().max(80), model: z.string().max(100), years: z.string().max(40), lightingUpdated: z.boolean() })).max(10) }).parse(await body(request));
+    const input = z.object({ ownerId: z.string().regex(/^\d{15,22}$/), items: z.array(z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/), type: z.enum(['car', 'map', 'addon']), manufacturer: z.string().max(80), model: z.string().max(100), years: z.string().max(40), lightingUpdated: z.boolean(), tags: z.array(z.string().trim().min(1).max(60)).max(40).optional() })).max(10) }).parse(await body(request));
     if (!env.ADMIN_DISCORD_IDS.split(',').map(v => v.trim()).includes(input.ownerId)) throw new HubError('FORBIDDEN', 'Owner access is required.', 403);
     await auth.membership(input.ownerId); const updated = [];
     for (const item of input.items) {
       const row = await store.get('SELECT m.id,m.name,m.metadata FROM mods m JOIN versions v ON v.id=m.active_version WHERE v.sha256=? AND m.deleted_at IS NULL', item.sha256); if (!row) continue;
       const previous = metadataSchema.parse(JSON.parse(row.metadata));
       const name = item.lightingUpdated && !row.name.endsWith(' (0.40 update)') ? `${row.name} (0.40 update)` : row.name;
-      const metadata = metadataSchema.parse({ ...previous, name, type: item.type, manufacturer: item.manufacturer, model: item.model, years: item.years, lightingUpdated: item.lightingUpdated });
+      const metadata = metadataSchema.parse({ ...previous, name, type: item.type, manufacturer: item.manufacturer, model: item.model, years: item.years, lightingUpdated: item.lightingUpdated, tags: item.tags ?? previous.tags });
       if (JSON.stringify(previous) === JSON.stringify(metadata)) continue;
       await store.run('UPDATE mods SET name=?,type=?,metadata=?,search=?,updated_at=? WHERE id=?', metadata.name, metadata.type, JSON.stringify(metadata), store.search(metadata), Date.now(), row.id);
       await store.audit(input.ownerId, 'update_metadata', row.id, { lightingUpdated: item.lightingUpdated, type: item.type }); updated.push(row.id);
