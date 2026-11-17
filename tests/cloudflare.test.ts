@@ -12,6 +12,7 @@ let sqlite: DatabaseSync, env: Env, store: Store, identity: string, belongs: boo
 beforeEach(() => {
   sqlite = new DatabaseSync(':memory:'); sqlite.exec(readFileSync('cloudflare/migrations/0001_library.sql', 'utf8'));
   sqlite.exec(readFileSync('cloudflare/migrations/0003_reports.sql', 'utf8'));
+  sqlite.exec(readFileSync('cloudflare/migrations/0004_download_bandwidth.sql', 'utf8'));
   const prepare = (sql: string) => ({ values: [] as any[], sql, bind(...values: any[]) { this.values = values; return this; }, async first() { return sqlite.prepare(sql).get(...this.values) || null; }, async all() { return { results: sqlite.prepare(sql).all(...this.values) }; }, async run() { return sqlite.prepare(sql).run(...this.values); } });
   env = { DB: { prepare, async batch(statements: any[]) { sqlite.exec('BEGIN'); try { const results = statements.map(s => sqlite.prepare(s.sql).run(...s.values)); sqlite.exec('COMMIT'); return results; } catch (e) { sqlite.exec('ROLLBACK'); throw e; } } } as any, APP_BASE_URL: origin, SESSION_SECRET: 'a'.repeat(48), DISCORD_CLIENT_ID: '345678901234567890', DISCORD_CLIENT_SECRET: 'client-secret', DISCORD_BOT_TOKEN: 'bot-secret', DISCORD_GUILD_ID: '456789012345678901', ADMIN_DISCORD_IDS: owner, DISCORD_INVITE_URL: 'https://discord.gg/test', GITHUB_REPOSITORY: 'owner/repo', GITHUB_TOKEN: 'github-secret', PUBLISH_CALLBACK_SECRET: 'callback-secret' };
   store = new Store(env.DB); identity = owner; belongs = true;
@@ -25,6 +26,17 @@ beforeEach(() => {
   }));
 });
 afterEach(() => { vi.unstubAllGlobals(); sqlite.close(); });
+it('shares the download pool across active leases and releases abandoned allocations', async () => {
+  const { token } = await login(), modId = await listing(), versionId = crypto.randomUUID(), first = crypto.randomUUID(), second = crypto.randomUUID(), now = Date.now();
+  await store.run('INSERT INTO versions VALUES(?,?,?,?,?,?,?,?,?)', versionId, modId, '', '', 'Car.zip', 100, 'a'.repeat(64), 'github:12', now);
+  for (const id of [first, second]) await store.run('INSERT INTO download_tickets(id,session_hash,user_id,mod_id,version_id,expires_at,lease_expires_at) VALUES(?,?,?,?,?,?,?)', id, await hash(token), owner, modId, versionId, now + 60000, now + 20000);
+  expect((await request(`/api/v1/downloads/${first}/pace`, 'POST')).status).toBe(401);
+  expect(await (await request(`/api/v1/downloads/${first}/pace`, 'POST', token, {})).json()).toEqual({ bytesPerSecond: 10000000 });
+  await store.run('UPDATE download_tickets SET lease_expires_at=? WHERE id=?', now - 1, second);
+  expect(await (await request(`/api/v1/downloads/${first}/pace`, 'POST', token, {})).json()).toEqual({ bytesPerSecond: 20000000 });
+  const other = await login(member);
+  expect((await request(`/api/v1/downloads/${first}/pace`, 'POST', other.token, {})).status).toBe(401);
+});
 async function request(path: string, method = 'GET', token?: string, body?: unknown) { return worker.fetch(new Request(origin + path, { method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body ? { 'content-type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }), env); }
 async function login(id = owner) {
   identity = id; const auth = new Auth(env, store, origin), start = await auth.start();

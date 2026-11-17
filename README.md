@@ -2,7 +2,7 @@
 
 Windows BeamNG mod library with Arabic and English, Discord membership verification, and owner administration.
 
-Download the [Windows installer or portable program](https://github.com/ghanemmohammedpc-cmd/ANDREWSNEWHAPPINESSAREA/releases/tag/program-0.1.1).
+Download the [Windows installer or portable program](https://github.com/ghanemmohammedpc-cmd/ANDREWSNEWHAPPINESSAREA/releases/tag/program-0.1.2).
 
 ## Current build
 
@@ -13,6 +13,8 @@ Download the [Windows installer or portable program](https://github.com/ghanemmo
 - Uploads preserve mod names, creator names and ZIP filenames. Identical ZIPs are rejected even when renamed.
 - Downloads support cancellation and resuming. ZIP structure, entry CRCs, size and SHA-256 are checked before installation.
 - The default installation folder is BeamNG.drive's `current/mods/repo`. Cars, Maps and Extra have separate sections; car listings can be filtered and sorted by brand.
+- Each section loads its complete listing automatically. Preview images load near the visible area.
+- The hosted service allocates a shared 20 MB/s pool across active downloads in the program. Clients refresh their allocation every five seconds; abandoned leases expire after twenty seconds. Set the server-only `DOWNLOAD_BANDWIDTH_BYTES_PER_SECOND` variable to change the pool. This pacing applies to program downloads, not direct GitHub downloads or older clients.
 - Members can report a car to the owner. Reports are private to the reporter and the owner administration service; the owner's dashboard supports resolving and reopening them.
 - Verified material lighting updates carry the Team Razka lighting credit and `(0.40 update)` label.
 - Replacing an existing ZIP requires confirmation and makes a verified backup. Uninstall only removes unchanged files installed by the program.

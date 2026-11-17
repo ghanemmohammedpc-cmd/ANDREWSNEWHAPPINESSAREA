@@ -1,4 +1,19 @@
 import { HubError } from '../shared/schema';
+export interface StreamContext { waitUntil(promise: Promise<unknown>): void; }
+export function verifiedStream(source: ReadableStream<Uint8Array>, length: number, completed: () => Promise<unknown>, context?: StreamContext) {
+  const NativeStream = (globalThis as unknown as { FixedLengthStream?: new (length: number) => TransformStream<Uint8Array, Uint8Array> }).FixedLengthStream;
+  if (NativeStream) {
+    const stream = new NativeStream(length);
+    const completion = source.pipeTo(stream.writable).then(completed).catch(() => { console.error('Download stream did not complete.'); });
+    context?.waitUntil(completion);
+    return stream.readable;
+  }
+  let transferred = 0;
+  return source.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) { transferred += chunk.length; if (transferred > length) throw new HubError('SIZE_MISMATCH', 'The downloaded size was incorrect.'); controller.enqueue(chunk); },
+    async flush() { if (transferred !== length) throw new HubError('SIZE_MISMATCH', 'The download was incomplete.'); await completed(); },
+  }));
+}
 export function downloadRange(size: number, range: string | null, response: Response) {
   let start = 0, end = size - 1;
   if (range) {

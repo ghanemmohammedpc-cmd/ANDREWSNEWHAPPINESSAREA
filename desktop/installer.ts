@@ -9,6 +9,7 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { HubError, safeFilename, idSchema, modSchema, versionSchema, type Mod, type ModVersion, type Progress } from '../shared/schema';
 import { validateArchive } from '../server/archive';
+import { DownloadPacer } from './download-pace';
 
 export type Installed = { modId: string; name: string; versionId: string; filename: string; path: string; sha256: string; size: number; installedAt: number; managed: boolean; backup?: string; backupSha256?: string };
 export type DownloadTicket = { id: string; path: string; version: ModVersion; expiresAt: number };
@@ -95,7 +96,7 @@ export async function installVerified(options: { part: string; folder: string; v
 export class Installer {
   private jobs = new Map<string, { controller: AbortController; promise: Promise<unknown> }>();
   private active = 0; private waiting: Array<() => void> = []; private stateFile: string;
-  constructor(private options: { dataDir: string; folder: () => string; concurrency: () => number; ticket: (modId: string) => Promise<DownloadTicket>; fetch: (path: string, options: RequestInit) => Promise<Response>; report: (id: string, result: 'completed' | 'failed' | 'cancelled', sha256?: string, errorCode?: string) => Promise<void>; onProgress: (value: Progress) => void }) { this.stateFile = path.join(options.dataDir, 'installed.json'); }
+  constructor(private options: { dataDir: string; folder: () => string; concurrency: () => number; ticket: (modId: string) => Promise<DownloadTicket>; fetch: (path: string, options: RequestInit) => Promise<Response>; allocation?: (ticketId: string) => Promise<{ bytesPerSecond: number }>; report: (id: string, result: 'completed' | 'failed' | 'cancelled', sha256?: string, errorCode?: string) => Promise<void>; onProgress: (value: Progress) => void }) { this.stateFile = path.join(options.dataDir, 'installed.json'); }
   async records() { return readJson<Record<string, Installed>>(this.stateFile, {}); }
   private mutateRecords<T>(task: (records: Record<string, Installed>) => T | Promise<T>) {
     return serializeFile(this.stateFile, async () => { const records = await this.records(); const result = await task(records); await writeJson(this.stateFile, records); return result; });
@@ -157,7 +158,17 @@ export class Installer {
         let bytes = offset, sampleBytes = bytes, sampleTime = Date.now(), speed = 0;
         emit('transferring', bytes, version.size);
         const counter = new Transform({ transform: (chunk: Buffer, _encoding, callback) => { bytes += chunk.length; if (bytes > version.size) { callback(new HubError('SIZE_MISMATCH', 'The download is larger than expected.')); return; } const now = Date.now(); if (now - sampleTime > 200) { speed = (bytes - sampleBytes) * 1000 / (now - sampleTime); sampleTime = now; sampleBytes = bytes; emit('transferring', bytes, version.size, speed); } callback(null, chunk); } });
-        await pipeline(Readable.fromWeb(response.body as any), counter, createWriteStream(part, { flags: offset ? 'a' : 'w' }), { signal: controller.signal });
+        const rate = Number(response.headers.get('x-download-bytes-per-second'));
+        const pacer = Number.isSafeInteger(rate) && rate > 0 && rate <= 1000000000 ? new DownloadPacer(rate) : null;
+        let allocationPending = false;
+        const timer = pacer && this.options.allocation ? setInterval(() => {
+          if (allocationPending || controller.signal.aborted) return;
+          allocationPending = true;
+          this.options.allocation!(ticket!.id).then(value => { pacer.setRate(value.bytesPerSecond); }).catch(() => { pacer.setRate(Math.min(rate, 1000000)); }).finally(() => { allocationPending = false; });
+        }, 5000) : null;
+        const pacing = new Transform({ transform(chunk: Buffer, _encoding, callback) { if (!pacer) { callback(null, chunk); return; } pacer.wait(chunk.length, controller.signal).then(() => callback(null, chunk), callback); } });
+        try { await pipeline(Readable.fromWeb(response.body as any), pacing, counter, createWriteStream(part, { flags: offset ? 'a' : 'w' }), { signal: controller.signal }); }
+        finally { if (timer) clearInterval(timer); }
       }
       emit('validating', version.size, version.size);
       if (controller.signal.aborted) throw new HubError('CANCELLED', 'Download cancelled.');

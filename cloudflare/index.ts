@@ -3,7 +3,7 @@ import { HubError, idSchema, metadataSchema, querySchema, uploadSchema, safeFile
 import { Store, type Env } from './database';
 import { Auth, hash } from './auth';
 import { GitHub, chunkSize } from './github';
-import { boundedBytes, downloadRange } from './download';
+import { boundedBytes, downloadRange, verifiedStream, type StreamContext } from './download';
 
 const json = (value: unknown, status = 200) => Response.json(value, { status });
 function signInPage(title: string, message: string, status = 200) {
@@ -28,7 +28,15 @@ async function service(request: Request, env: Env) {
   const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') || '';
   if (!env.PUBLISH_CALLBACK_SECRET || await hash(bearer) !== await hash(env.PUBLISH_CALLBACK_SECRET)) throw new HubError('UNAUTHORIZED', 'Authentication is required.', 401);
 }
-export async function handle(request: Request, env: Env): Promise<Response> {
+async function downloadAllocation(store: Store, env: Env, ticketId: string) {
+  const now = Date.now();
+  await store.run('UPDATE download_tickets SET lease_expires_at=? WHERE id=? AND completed_at IS NULL AND transferred_at IS NULL', now + 20000, ticketId);
+  const row = await store.get('SELECT count(*) active FROM download_tickets WHERE lease_expires_at>? AND expires_at>? AND completed_at IS NULL AND transferred_at IS NULL', now, now);
+  const configured = Number(env.DOWNLOAD_BANDWIDTH_BYTES_PER_SECOND || 20000000);
+  const budget = Number.isSafeInteger(configured) && configured > 0 && configured <= 1000000000 ? configured : 20000000;
+  return { bytesPerSecond: Math.max(1, Math.floor(budget / Math.max(1, Number(row?.active || 0)))) };
+}
+export async function handle(request: Request, env: Env, context?: StreamContext): Promise<Response> {
   const url = new URL(request.url), origin = env.APP_BASE_URL || url.origin, path = url.pathname, method = request.method;
   const store = new Store(env.DB), auth = new Auth(env, store, origin), github = new GitHub(env);
   const match = (pattern: RegExp) => pattern.exec(path);
@@ -169,12 +177,16 @@ export async function handle(request: Request, env: Env): Promise<Response> {
     await store.run('INSERT INTO download_tickets(id,session_hash,user_id,mod_id,version_id,expires_at) VALUES(?,?,?,?,?,?)', id, user.sessionHash, user.id, mod.id, mod.activeVersion.id, expiresAt);
     return json({ id, path: `/api/v1/downloads/${id}/file`, expiresAt, version: mod.activeVersion });
   }
-  const download = match(/^\/api\/v1\/downloads\/([^/]+)\/(file|complete)$/);
+  const download = match(/^\/api\/v1\/downloads\/([^/]+)\/(file|complete|pace)$/);
   if (download) {
     const id = idSchema.parse(download[1]), t = await store.get('SELECT t.*,v.filename,v.sha256,v.size,v.storage_key FROM download_tickets t JOIN versions v ON v.id=t.version_id WHERE t.id=? AND t.session_hash=?', id, user.sessionHash);
     if (!t || t.expires_at <= Date.now()) throw new HubError('DOWNLOAD_EXPIRED', 'Start the download again.', 401);
+    if (download[2] === 'pace' && method === 'POST') {
+      if (!t.lease_expires_at || t.completed_at || t.transferred_at) return json({ bytesPerSecond: 20000000 });
+      return json(await downloadAllocation(store, env, id));
+    }
     if (download[2] === 'complete' && method === 'POST') { const input = z.object({ result: z.enum(['completed', 'failed', 'cancelled']), sha256: z.string().optional(), errorCode: z.string().max(60).optional() }).parse(await body(request)); if (input.result === 'completed' && (!t.transferred_at || input.sha256 !== t.sha256)) throw new HubError('CHECKSUM_MISMATCH', 'The downloaded file has not been verified.', 409); if (!t.completed_at) await store.run('UPDATE download_tickets SET completed_at=?,result=?,error_code=? WHERE id=?', Date.now(), input.result, input.errorCode || null, id); return json({ ok: true }); }
-    if (download[2] === 'file' && method === 'GET') { const assetId = /github:(\d+)$/.exec(t.storage_key)?.[1]; if (!assetId || t.completed_at) throw new HubError('ASSET_MISSING', 'The ZIP is not available.', 404); const range = request.headers.get('range'); if (range && !/^bytes=\d+-\d*$/.test(range)) throw new HubError('INVALID_RANGE', 'Invalid download range.', 416); const r = await github.download(assetId, range || undefined); const expected = downloadRange(t.size, range, r); let transferred = 0; const headers = new Headers({ 'content-type': 'application/zip', 'accept-ranges': 'bytes', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(t.filename)}` }); for (const key of ['content-length', 'content-range']) if (r.headers.has(key)) headers.set(key, r.headers.get(key)!); const transform = new TransformStream<Uint8Array, Uint8Array>({ transform(chunk, controller) { transferred += chunk.length; if (transferred > expected.length) throw new HubError('SIZE_MISMATCH', 'The downloaded size was incorrect.'); controller.enqueue(chunk); }, async flush() { if (transferred !== expected.length) throw new HubError('SIZE_MISMATCH', 'The download was incomplete.'); if (expected.reachesEnd) await store.run('UPDATE download_tickets SET transferred_at=? WHERE id=?', Date.now(), id); } }); return new Response(r.body!.pipeThrough(transform), { status: r.status, headers }); }
+    if (download[2] === 'file' && method === 'GET') { const assetId = /github:(\d+)$/.exec(t.storage_key)?.[1]; if (!assetId || t.completed_at) throw new HubError('ASSET_MISSING', 'The ZIP is not available.', 404); const range = request.headers.get('range'); if (range && !/^bytes=\d+-\d*$/.test(range)) throw new HubError('INVALID_RANGE', 'Invalid download range.', 416); const r = await github.download(assetId, range || undefined); const expected = downloadRange(t.size, range, r); const allocation = await downloadAllocation(store, env, id); const headers = new Headers({ 'content-type': 'application/zip', 'accept-ranges': 'bytes', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(t.filename)}` }); for (const key of ['content-length', 'content-range']) if (r.headers.has(key)) headers.set(key, r.headers.get(key)!); headers.set('x-download-bytes-per-second', String(allocation.bytesPerSecond)); const stream = verifiedStream(r.body!, expected.length, async () => { if (expected.reachesEnd) await store.run('UPDATE download_tickets SET transferred_at=? WHERE id=?', Date.now(), id); }, context); return new Response(stream, { status: r.status, headers }); }
   }
   const edit = match(/^\/api\/v1\/admin\/mods\/([^/]+)(?:\/(publish|unpublish))?$/);
   if (edit) {
@@ -241,9 +253,9 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   throw new HubError('NOT_FOUND', 'This request is not available.', 404);
 }
 export default {
-  async fetch(request: Request, env: Env) {
+  async fetch(request: Request, env: Env, context?: StreamContext) {
     let response: Response;
-    try { response = await handle(request, env); }
+    try { response = await handle(request, env, context); }
     catch (error) { const status = error instanceof HubError ? error.status : error instanceof ZodError || error instanceof SyntaxError ? 400 : 500; if (status === 500) console.error(JSON.stringify({ route: new URL(request.url).pathname, type: error instanceof Error ? error.name : 'Error', detail: error instanceof Error ? error.message.slice(0, 240).replace(/Bearer\s+\S+/gi, 'Bearer [redacted]') : 'Unexpected failure' })); response = json({ error: { code: error instanceof HubError ? error.code : status === 400 ? 'INVALID_INPUT' : 'REQUEST_FAILED', message: error instanceof HubError ? error.message : status === 400 ? 'Check the entered details.' : 'The request could not be completed.' } }, status); }
     const headers = new Headers(response.headers); headers.set('x-content-type-options', 'nosniff'); headers.set('cache-control', 'no-store'); headers.set('referrer-policy', 'no-referrer');
     return new Response(response.body, { status: response.status, headers });
