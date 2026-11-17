@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 manifest_path = ROOT / 'data/collection/manifest.json'
 manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
 new_only = '--new-cars' in sys.argv
+only = sys.argv[sys.argv.index('--only') + 1] if '--only' in sys.argv else None
 used = set()
 def signature(raw):
     return hashlib.sha256(Image.open(io.BytesIO(raw)).convert('RGB').resize((96, 54)).tobytes()).hexdigest()
@@ -22,6 +23,8 @@ def blue_background(raw):
     top = pixels[:96 * 16]
     return sum(g > 60 and b > 55 and r < g * .55 and r < b * .7 for r, g, b in top) / len(top) > .48
 for item in manifest['items']:
+    if only and item['filename'] != only:
+        continue
     if item.get('metadata', {}).get('type') != 'car' or new_only and not item.get('sourceFile'):
         continue
     try:
