@@ -2,6 +2,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import path from 'node:path';
 const repo = 'ghanemmohammedpc-cmd/ANDREWSNEWHAPPINESSAREA';
 const metadata = JSON.parse(await readFile('package.json', 'utf8'));
 const gh = process.env.GH_PATH || 'C:/Users/ghane/Documents/Codex/Tools/GitHub CLI/bin/gh.exe';
@@ -19,8 +20,12 @@ if (existing) throw new Error('This program release already exists. No files wer
 const files = ['Team Razka Program Setup.exe', 'Team Razka Program.exe'];
 const assets = [];
 for (const filename of files) {
-  const file = `release/${filename}`, info = await stat(file), hash = createHash('sha256');
+  const file = path.join(process.env.PROGRAM_RELEASE_DIRECTORY || 'release', filename), info = await stat(file), hash = createHash('sha256');
+  const version = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '(Get-Item -LiteralPath $env:RAZKA_ARTIFACT_PATH).VersionInfo.ProductVersion'], { env: { ...process.env, RAZKA_ARTIFACT_PATH: path.resolve(file) }, encoding: 'utf8', windowsHide: true }).trim();
+  if (version.split('+')[0] !== metadata.version) throw new Error(`The ${filename} version does not match the program release.`);
   for await (const chunk of createReadStream(file)) hash.update(chunk);
+  const after = await stat(file);
+  if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) throw new Error('The program package is still being written.');
   assets.push({ filename, file, size: info.size, sha256: hash.digest('hex') });
 }
 const release = await api('/releases', 'POST', { tag_name: tag, name: 'Team Razka Program', body: 'BeamNG mod library for Team Razka Discord members.\n\nUse Team Razka Program Setup.exe to install, or Team Razka Program.exe for the portable version.\n\nمكتبة مودات BeamNG لأعضاء ديسكورد Team Razka. استخدم ملف Setup للتثبيت أو الملف الآخر للتشغيل المحمول.', draft: true, prerelease: false });

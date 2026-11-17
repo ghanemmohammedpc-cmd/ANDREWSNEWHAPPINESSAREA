@@ -7,8 +7,11 @@ export async function inspectMod(file: string): Promise<{ creator: string; type:
   return new Promise((resolve, reject) => yauzl.open(file, { lazyEntries: true }, (error, zip) => {
     if (error || !zip) { reject(error); return; }
     let inspected = 0;
+    const configurations = new Set<string>(), structures = new Set<string>();
     zip.on('error', reject);
     zip.on('entry', entry => {
+      const vehicle = /^vehicles\/(?!common\/)([^/]+)\/.*\.(pc|jbeam)$/i.exec(entry.fileName);
+      if (vehicle) (vehicle[2].toLowerCase() === 'pc' ? configurations : structures).add(vehicle[1].toLowerCase());
       if (/^levels\//i.test(entry.fileName)) result.type = 'map';
       else if (result.type !== 'map' && /^vehicles\/(?!common\/)[^/]+\/info\.json$/i.test(entry.fileName)) result.type = 'car';
       if (inspected >= 8 || entry.uncompressedSize > 512000 || !/^(vehicles|levels)\/[^/]+\/info\.json$/i.test(entry.fileName)) { zip.readEntry(); return; }
@@ -31,6 +34,6 @@ export async function inspectMod(file: string): Promise<{ creator: string; type:
         });
       });
     });
-    zip.on('end', () => { if (/wheel|rim|engine.pack|license.plate|passenger|universal.dummy|weapons|معزز/i.test(path.basename(file))) result.type = 'addon'; resolve(result); }); zip.readEntry();
+    zip.on('end', () => { if (result.type !== 'map' && [...configurations].some(root => structures.has(root))) result.type = 'car'; if (/wheel|rim|engine.pack|license.plate|passenger|universal.dummy|weapons|معزز/i.test(path.basename(file))) result.type = 'addon'; resolve(result); }); zip.readEntry();
   }));
 }

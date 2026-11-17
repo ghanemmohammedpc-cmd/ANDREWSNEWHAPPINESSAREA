@@ -2,7 +2,7 @@
 
 Windows BeamNG mod library with Arabic and English, Discord membership verification, and owner administration.
 
-Download the [Windows installer or portable program](https://github.com/ghanemmohammedpc-cmd/ANDREWSNEWHAPPINESSAREA/releases/tag/program-0.1.2).
+Download the [Windows installer or portable program](https://github.com/ghanemmohammedpc-cmd/ANDREWSNEWHAPPINESSAREA/releases/tag/program-0.1.3).
 
 ## Current build
 

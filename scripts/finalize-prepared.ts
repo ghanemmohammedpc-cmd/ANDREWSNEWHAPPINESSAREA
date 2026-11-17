@@ -17,7 +17,7 @@ for (const item of manifest.items) {
     await validateArchive(item.file); const before = item.sha256, digest = await fileHash(item.file), detected = await inspectMod(item.file);
     if (before !== digest && journal[before]?.modId) item.replacesModId = journal[before].modId;
     const source = item.originalFile || item.file;
-    const type = /[\\/]Extras[\\/]/i.test(source) ? 'addon' : /[\\/]Maps[\\/]/i.test(source) ? 'map' : detected.type;
+    const type = detected.type;
     item.metadata = metadataSchema.parse({ ...detected, ...item.metadata, type, years: item.metadata.years || detected.years, creator: !item.metadata.creator || item.metadata.creator === 'Unknown' ? detected.creator : item.metadata.creator });
     Object.assign(item, { sha256: digest, size: info.size, modified: info.mtimeMs, fingerprint: await fingerprint(item.file), status: 'ready' });
     console.log(`Verified ${item.filename}`);

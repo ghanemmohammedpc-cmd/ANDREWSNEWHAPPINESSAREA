@@ -33,7 +33,7 @@ for item in manifest['items']:
         continue
     filename = item['filename']
     parts = pathlib.PureWindowsPath(item.get('originalFile', item['file'])).parts
-    if 'Extras' in parts or re.search(r'wheel|rim|engine.pack|license.plate|passenger|universal.dummy|weapons|معزز', filename, re.I):
+    if ('Extras' in parts and metadata['type'] != 'car') or re.search(r'wheel|rim|engine.pack|license.plate|passenger|universal.dummy|weapons|معزز', filename, re.I):
         metadata['type'] = 'addon'
         metadata['manufacturer'] = ''
         metadata['model'] = ''
