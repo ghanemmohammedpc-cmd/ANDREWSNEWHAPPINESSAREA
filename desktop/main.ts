@@ -13,8 +13,10 @@ import { validateArchive } from '../server/archive';
 import { inspectMod } from './metadata';
 import { setTimeout as waitForStatus } from 'node:timers/promises';
 import type { Action, Bootstrap, Selection } from '../shared/bridge';
+import { startUpdates } from './updates';
 
 app.setName('Team Razka Program');
+app.setAppUserModelId('com.teamrazka.program');
 if (process.env.HUB_USER_DATA && !app.isPackaged) app.setPath('userData', path.resolve(process.env.HUB_USER_DATA));
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 let window: BrowserWindow;
@@ -191,7 +193,7 @@ async function call(method: string, args: any[]) {
     case 'recheck': { const member = userSchema.parse(await api('/api/v1/auth/recheck-membership', 'POST', {})); user = member; return member; }
     case 'joinDiscord': return trustedExternal(inviteUrl);
     case 'request': if (!token) throw new HubError('UNAUTHORIZED', 'Sign in with Discord to continue.'); return resource(args[0], args[1]);
-    case 'image': { await ensureUser(); const id = idSchema.parse(args[0]); if (!images.has(id)) { const response = await fetchApi(`/api/v1/media/${id}`); const bytes = Buffer.from(await response.arrayBuffer()); if (bytes.length > 10 * 1024 ** 2) throw new HubError('IMAGE_TOO_LARGE', 'The image is too large.'); const mime = response.headers.get('content-type')?.split(';')[0] || ''; if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) throw new HubError('INVALID_IMAGE', 'Unsupported picture format.'); images.set(id, `data:${mime};base64,${bytes.toString('base64')}`); if (images.size > 200) images.delete(images.keys().next().value!); } return images.get(id); }
+    case 'image': { if (!user || !token) throw new HubError('UNAUTHORIZED', 'Sign in with Discord to continue.', 401); const id = idSchema.parse(args[0]); if (!images.has(id)) { const response = await fetchApi(`/api/v1/media/${id}`); const bytes = Buffer.from(await response.arrayBuffer()); if (bytes.length > 10 * 1024 ** 2) throw new HubError('IMAGE_TOO_LARGE', 'The image is too large.'); const mime = response.headers.get('content-type')?.split(';')[0] || ''; if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) throw new HubError('INVALID_IMAGE', 'Unsupported picture format.'); images.set(id, `data:${mime};base64,${bytes.toString('base64')}`); if (images.size > 200) images.delete(images.keys().next().value!); } return images.get(id); }
     case 'settings': await ensureUser(); return settings;
     case 'setLanguage': {
       const language = z.enum(['ar', 'en']).parse(args[0]), area = z.enum(['app', 'admin']).parse(args[1]);
@@ -217,7 +219,7 @@ async function call(method: string, args: any[]) {
   }
 }
 async function createWindow() {
-  window = new BrowserWindow({ width: 1450, height: 900, minWidth: 1000, minHeight: 680, title: 'TEAM RAZKA PROGRAM', icon: path.join(root, 'assets', 'logo.png'), backgroundColor: '#0B0B0D', frame: false, show: false, webPreferences: { preload: path.join(root, 'dist', 'desktop', 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
+  window = new BrowserWindow({ width: 1450, height: 900, minWidth: 1000, minHeight: 680, title: 'TEAM RAZKA PROGRAM', icon: path.join(root, 'assets', process.platform === 'win32' ? 'icon.ico' : 'logo.png'), backgroundColor: '#0B0B0D', frame: false, show: false, webPreferences: { preload: path.join(root, 'dist', 'desktop', 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' })); window.webContents.on('will-navigate', event => event.preventDefault());
   window.once('ready-to-show', () => window.show());
   if (isDev) await window.loadURL(process.env.HUB_DEV_URL!); else await window.loadURL('app://hub/index.html');
@@ -251,6 +253,7 @@ app.whenReady().then(async () => {
     } catch (error) { lastError = error instanceof HubError ? error.code : 'REQUEST_FAILED'; return { ok: false, error: { code: lastError, message: error instanceof HubError ? error.message : 'The request could not be completed.' } }; }
   });
   await createWindow();
+  startUpdates(() => [...progress.values()].some(job => !['completed', 'cancelled', 'failed'].includes(job.stage)));
   setInterval(() => { if (user) ensureUser().catch(() => {}); }, 30000).unref();
 });
 app.on('window-all-closed', () => { installer?.cancelAll(); for (const upload of uploads.values()) upload.controller.abort(); app.quit(); });

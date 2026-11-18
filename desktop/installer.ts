@@ -94,6 +94,7 @@ export async function installVerified(options: { part: string; folder: string; v
   return { path: target, managed: true, backup, backupSha256 };
 }
 export class Installer {
+  private inspected = new Map<string, { signature: string; digest: string }>();
   private jobs = new Map<string, { controller: AbortController; promise: Promise<unknown> }>();
   private active = 0; private waiting: Array<() => void> = []; private stateFile: string;
   constructor(private options: { dataDir: string; folder: () => string; concurrency: () => number; ticket: (modId: string) => Promise<DownloadTicket>; fetch: (path: string, options: RequestInit) => Promise<Response>; allocation?: (ticketId: string) => Promise<{ bytesPerSecond: number }>; report: (id: string, result: 'completed' | 'failed' | 'cancelled', sha256?: string, errorCode?: string) => Promise<void>; onProgress: (value: Progress) => void }) { this.stateFile = path.join(options.dataDir, 'installed.json'); }
@@ -104,7 +105,20 @@ export class Installer {
   async inspect() {
     const records = await this.records(); const result: Record<string, Installed & { present: boolean; modified: boolean }> = {};
     for (const [id, record] of Object.entries(records)) {
-      const info = await regularFile(record.path); const present = Boolean(info); const modified = Boolean(info && (info.size !== record.size || await fileHash(record.path) !== record.sha256));
+      const info = await regularFile(record.path); const present = Boolean(info);
+      let modified = false;
+      if (info) {
+        const signature = `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+        let cached = this.inspected.get(record.path);
+        if (info.size === record.size && cached?.signature !== signature) {
+          const digest = await fileHash(record.path);
+          const after = await regularFile(record.path);
+          if (after && `${after.dev}:${after.ino}:${after.size}:${after.mtimeMs}:${after.ctimeMs}` === signature) {
+            cached = { signature, digest }; this.inspected.set(record.path, cached);
+          } else cached = undefined;
+        }
+        modified = info.size !== record.size || cached?.signature !== signature || cached.digest !== record.sha256;
+      } else this.inspected.delete(record.path);
       result[id] = { ...record, present, modified };
     }
     return result;

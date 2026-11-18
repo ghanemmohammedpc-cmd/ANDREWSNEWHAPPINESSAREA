@@ -15,6 +15,15 @@ async function fixture() {
   return { mod, source, options: { part: source, folder: path.join(folder, 'mods'), version: mod.activeVersion!, replace: false, backupFolder: path.join(folder, 'backups') } };
 }
 describe('safe BeamNG installation', () => {
+  it('refreshes cached inspection after a same-size ZIP edit', async () => {
+    const { mod, source } = await fixture();
+    const installer = new Installer({ dataDir: folder, folder: () => folder, concurrency: () => 1, ticket: async () => { throw new Error('unused'); }, fetch: async () => { throw new Error('unused'); }, report: async () => {}, onProgress: () => {} });
+    await writeFile(path.join(folder, 'installed.json'), JSON.stringify({ [mod.id]: { modId: mod.id, name: mod.name, versionId: mod.activeVersion!.id, filename: mod.activeVersion!.filename, path: source, sha256: mod.activeVersion!.sha256, size: mod.activeVersion!.size, installedAt: Date.now(), managed: true } }));
+    expect((await installer.inspect())[mod.id].modified).toBe(false);
+    expect((await installer.inspect())[mod.id].modified).toBe(false);
+    const data = await readFile(source); data[data.length - 1] ^= 1; await writeFile(source, data);
+    expect((await installer.inspect())[mod.id].modified).toBe(true);
+  });
   it('keeps the exact basename and leaves unrelated staging files alone', async () => {
     const { options } = await fixture(); await mkdir(options.folder);
     const unrelated = path.join(options.folder, options.version.filename + '.installing'); await writeFile(unrelated, 'unrelated');

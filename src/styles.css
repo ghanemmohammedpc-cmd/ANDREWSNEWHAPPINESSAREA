@@ -9,3 +9,5 @@
 .lighting-tag{display:inline-block;font-size:10px;line-height:1.5;color:#c7b1bf;border:1px solid #47343f;border-radius:4px;padding:3px 6px;margin:7px 0 2px}.detail-content>.lighting-tag{font-size:11px}
 .picture-frame { width: 100%; height: 100%; }
 .picture-frame > img { width: 100%; height: 100%; display: block; object-fit: contain; }
+
+.mod-card { content-visibility: auto; contain-intrinsic-size: auto 450px; }

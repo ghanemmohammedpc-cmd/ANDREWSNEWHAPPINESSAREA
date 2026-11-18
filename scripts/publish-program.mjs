@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, writeFile, mkdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -28,12 +28,24 @@ for (const filename of files) {
   if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) throw new Error('The program package is still being written.');
   assets.push({ filename, file, size: info.size, sha256: hash.digest('hex') });
 }
+const directory = process.env.PROGRAM_RELEASE_DIRECTORY || 'release';
+const setup = assets[0];
+const generated = await readFile(path.join(directory, 'latest.yml'), 'utf8');
+if (!generated.startsWith(`version: ${metadata.version}\n`) && !generated.startsWith(`version: ${metadata.version}\r\n`)) throw new Error('The update feed version does not match the release.');
 const release = await api('/releases', 'POST', { tag_name: tag, name: 'Team Razka Program', body: 'BeamNG mod library for Team Razka Discord members.\n\nUse Team Razka Program Setup.exe to install, or Team Razka Program.exe for the portable version.\n\nمكتبة مودات BeamNG لأعضاء ديسكورد Team Razka. استخدم ملف Setup للتثبيت أو الملف الآخر للتشغيل المحمول.', draft: true, prerelease: false });
 for (const asset of assets) {
   const response = await fetch(`https://uploads.github.com/repos/${repo}/releases/${release.id}/assets?name=${encodeURIComponent(asset.filename)}&label=${encodeURIComponent(asset.filename)}`, { method: 'POST', headers: { ...headers, 'content-type': 'application/vnd.microsoft.portable-executable', 'content-length': String(asset.size) }, body: createReadStream(asset.file), duplex: 'half', redirect: 'error', signal: AbortSignal.timeout(1800000) });
   if (!response.ok) throw new Error(`Program upload ${response.status}`);
   const uploaded = await response.json();
   if (uploaded.digest !== `sha256:${asset.sha256}` || uploaded.size !== asset.size) throw new Error('Program checksum did not match.');
+  asset.url = uploaded.browser_download_url;
 }
 const published = await api(`/releases/${release.id}`, 'PATCH', { draft: false, make_latest: 'true' });
+const feed = generated.replace(/(url: |^path: ).+$/gm, (_match, field) => `${field}${JSON.stringify(setup.url)}`);
+await mkdir('website/updates', { recursive: true });
+await writeFile('website/updates/latest.yml', feed);
+let page = await readFile('website/index.html', 'utf8');
+page = page.replace(/program-\d+\.\d+\.\d+/g, tag).replace(/v\d+\.\d+\.\d+/g, `v${metadata.version}`)
+  .replace(/(<code dir="ltr">)[a-f0-9]{64}(<\/code>)/g, (_match, before, after) => before + setup.sha256 + after);
+await writeFile('website/index.html', page);
 console.log(published.html_url);
