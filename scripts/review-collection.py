@@ -9,7 +9,7 @@ manifest_path = root / 'data/collection/manifest.json'
 manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
 work = root.parent / 'work'
 sources = [work / 'njm-repair/lighting-state.json', work / 'njm-repair/existing-lighting-state.json', work / 'repo-bulb-sonata-reference/installation-state.json', work / 'repo-bulb-sonata-reference/remaining-installation.json']
-sources += [work / 'safari-2024/lighting-state.json', work / 'lc70-2025/lighting-state.json']
+sources += [work / 'safari-2024/lighting-state.json', work / 'lc70-2025/lighting-state.json', work / '506w/lighting-state.json']
 targets = {}
 for source in sources:
     data = json.loads(source.read_text(encoding='utf-8-sig'))
